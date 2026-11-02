@@ -27,14 +27,20 @@ fn start_background_call(method: String, path: String, body: String) -> u32 {
         .unwrap_or_else(PoisonError::into_inner)
         .get_or_insert_with(HashMap::new)
         .insert(id, None);
-    std::thread::spawn(move || {
+    let finish = move || {
         let answer = call_agent(&method, &path, &body);
         if let Some(calls) = BACKGROUND_CALLS.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
             if let Some(slot) = calls.get_mut(&id) {
                 *slot = Some(answer);
             }
         }
-    });
+    };
+    // wenilla: a page has no threads (`thread::spawn` panics and freezes it), and the dial below
+    // fails at once there, so the call finishes inline.
+    #[cfg(target_arch = "wasm32")]
+    finish();
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(finish);
     id
 }
 
