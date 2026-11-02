@@ -356,7 +356,10 @@ impl Chain {
     fn index(&self) -> Option<&std::collections::HashSet<String>> {
         self.index
             .get_or_init(|| {
-                let bytes = crate::web::fetch_sync(&format!("{}/__index", self.base)).ok()?;
+                // Fresh each session: the list changes when the host's files do, and a cached copy
+                // would hide a file the host now serves.
+                let url = format!("{}/__index?t={}", self.base, js_sys::Date::now() as u64);
+                let bytes = crate::web::fetch_sync(&url).ok()?;
                 let names: Vec<String> = serde_json::from_slice(&bytes).ok()?;
                 Some(names.iter().map(|n| Self::index_key(n)).collect())
             })
