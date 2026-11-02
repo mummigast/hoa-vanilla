@@ -233,7 +233,8 @@ async fn index(State(state): State<DataState>) -> Response {
     match listed {
         Ok(bytes) => (
             [
-                (header::CACHE_CONTROL, "private, max-age=86400"),
+                // Revalidated every load: an overlay's files come and go with the game's updates.
+                (header::CACHE_CONTROL, "no-cache"),
                 (header::CONTENT_TYPE, "application/json"),
             ],
             bytes,

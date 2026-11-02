@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 /// The chain prefixes the overlay answers for, lowercase, `\`-separated.
 const ROOTS: [&str; 2] = ["interface\\gluexml\\", "interface\\addons\\"];
 
+/// The login screen's agreements, which the reference reads loose from `Data\`
+/// (`<SimpleHTML file="eula.html">`): asked for by bare name, served from the folder's `Data`.
+const DATA_PAGES: [&str; 2] = ["eula.html", "tos.html"];
+
 /// The folder holding the loose `Interface` tree: the game folder, `Data`'s parent.
 #[derive(Clone, Debug)]
 pub struct Overlay {
@@ -23,6 +27,10 @@ impl Overlay {
     /// The file a chain name maps to, when it is under [`ROOTS`] and exists.
     pub fn find(&self, name: &str) -> Option<PathBuf> {
         let lower = name.to_ascii_lowercase();
+        if DATA_PAGES.contains(&lower.as_str()) {
+            let data = child_ignoring_case(&self.root, "Data")?;
+            return child_ignoring_case(&data, name).filter(|p| p.is_file());
+        }
         if !ROOTS.iter().any(|r| lower.starts_with(r)) {
             return None;
         }
@@ -38,7 +46,11 @@ impl Overlay {
 
     /// Every file under [`ROOTS`], as chain names (`Interface\AddOns\X\X.toc`).
     pub fn names(&self) -> Vec<String> {
-        let mut out = Vec::new();
+        let mut out: Vec<String> = DATA_PAGES
+            .iter()
+            .filter(|n| self.find(n).is_some())
+            .map(|n| n.to_string())
+            .collect();
         for root in ROOTS {
             let mut dir = self.root.clone();
             let mut prefix = String::new();
