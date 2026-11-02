@@ -64,6 +64,11 @@ pub(crate) fn decide_present_hold(
     mut frames: Local<u32>,
 ) {
     let held = player.is_some_and(|p| p.holds_the_frame());
+    // wenilla: a page never withholds its present. Keeping the canvas texture across frames
+    // stalls the page's frame loop, so the destination never streams in and the hold never ends
+    // (a long same-map teleport froze the page). The body's settle hold still applies.
+    #[cfg(target_arch = "wasm32")]
+    let held = held && false;
     if held {
         *frames += 1;
     }
