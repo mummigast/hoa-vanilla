@@ -957,6 +957,7 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
+ "wgpu",
 ]
 
 [[package]]
@@ -4342,6 +4343,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "hoa"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "benilla-app",
+ "benilla-assets",
+ "benilla-buildstamp",
+ "benilla-formats",
+ "benilla-mlua",
+ "benilla-protocol",
+ "benilla-ui",
+ "benilla-world",
+ "bevy",
 ]
 
 [[package]]
@@ -8870,6 +8887,7 @@ dependencies = [
  "benilla-app",
  "benilla-buildstamp",
  "console_error_panic_hook",
+ "hoa",
  "wasm-bindgen",
 ]
 

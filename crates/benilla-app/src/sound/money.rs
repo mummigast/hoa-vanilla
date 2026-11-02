@@ -61,10 +61,14 @@ fn play_coin_on_coinage_change(
     }
 }
 
+const PLAYS_COIN_ON_MONEY_CHANGE: bool = false;
+
 pub(super) fn plugin(app: &mut App) {
     // After the calls, whose callbacks write the volumes it plays at.
     app.add_systems(
         Update,
-        play_coin_on_coinage_change.after(crate::vm_pass::VmPass::End),
+        play_coin_on_coinage_change
+            .after(crate::vm_pass::VmPass::End)
+            .run_if(|| PLAYS_COIN_ON_MONEY_CHANGE),
     );
 }

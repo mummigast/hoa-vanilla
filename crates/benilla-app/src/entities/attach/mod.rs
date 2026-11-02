@@ -36,6 +36,8 @@ pub(super) use merge::MergedFormsCache;
 mod preview;
 pub(super) use preview::build_dressup_preview;
 pub(crate) use preview::equip_slot;
+pub(crate) const FRESH_VISUALS_FADE_IN: bool = false;
+
 #[cfg(test)]
 mod arrival_tests;
 pub(super) mod glue_stage;
@@ -684,7 +686,7 @@ pub(super) fn attach_entity_visuals(
                 now,
                 // A fresh visual fades in; a rebuild (`Reattached`: a mount transition, a display
                 // swap) spawns steady.
-                fade: if reattached {
+                fade: if reattached || !FRESH_VISUALS_FADE_IN {
                     JoinedFade::Steady
                 } else {
                     JoinedFade::Pending {

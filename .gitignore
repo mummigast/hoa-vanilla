@@ -51,3 +51,6 @@ __pycache__/
 # The C sysroot for the wasm Lua build — fetched by scripts/web-setup.sh, ~300 MB
 /tools/wasi-sdk/
 /tools/binaryen/
+
+# Scratch screenshots in the client root
+/*.png

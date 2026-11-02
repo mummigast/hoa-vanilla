@@ -22,6 +22,8 @@ crate-type = ["cdylib"]
 # --no-default-features` would still pull benilla-app's OWN defaults (a path dep gets its own
 # feature resolution), silently linking the dev instruments into the page everyone visits.
 benilla-app = { path = "../benilla-app", default-features = false }
+# Hordes of Azeroth: its plugins ride on the same app, as `crates/hoa/src/main.rs` adds them natively.
+hoa = { path = "../hoa", default-features = false }
 # Pinned exact (workspace-wide rule, `docs/BENILLA-WASM-SPIKE.md`'s plan): a newer wasm-bindgen
 # crate plus the 0.2.122 CLI `scripts/web-build.sh` invokes emits broken glue — verified.
 wasm-bindgen = "=0.2.122"

@@ -79,6 +79,8 @@ pub(super) fn apply_scoped_view(
     spells: Option<Res<Spells>>,
     mut scoped: ResMut<ScopedView>,
     mut fov_zoom: ResMut<FovZoom>,
+    mut player: ResMut<super::Player>,
+    real: Res<Time<Real>>,
 ) {
     let catalog = spells.as_ref().map(|s| &s.catalog);
     let aura = self_q
@@ -99,8 +101,10 @@ pub(super) fn apply_scoped_view(
         .filter(|&(_, deg)| deg > 0.0);
     scoped.observe(aura, !arrived.is_empty());
 
-    // `stamp_world_fov` turns it into the field of view at the frame's aspect.
-    let want = scoped.zoom.unwrap_or(1.0);
+    // `stamp_world_fov` turns it into the field of view at the frame's aspect. A dash's kick
+    // widens the view only while no scope holds it.
+    let dash_kick = player.dash.tick_fov_kick(real.delta_secs());
+    let want = scoped.zoom.unwrap_or(dash_kick);
     if fov_zoom.0 != want {
         fov_zoom.0 = want;
     }

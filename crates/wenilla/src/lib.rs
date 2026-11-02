@@ -26,7 +26,7 @@ pub fn start() {
     // did the run exit with?" — that hasn't been decided yet. The native shims' `fn main() ->
     // AppExit` (where the return value IS the process exit code) has no wasm32 equivalent: a
     // browser tab has no exit code for a page to report.
-    benilla_app::run(BuildId {
+    benilla_app::run_with(BuildId {
         version: env!("CARGO_PKG_VERSION"),
         describe: env!("BENILLA_GIT_DESCRIBE"),
         sha: env!("BENILLA_GIT_SHA"),
@@ -35,5 +35,7 @@ pub fn start() {
         profile: env!("BENILLA_PROFILE"),
         project_dir: env!("BENILLA_PROJECT_DIR"),
         ..Default::default()
+    }, |app| {
+        app.add_plugins(hoa::plugin::HordesOfAzerothPlugin);
     });
 }

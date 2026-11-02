@@ -255,6 +255,58 @@ impl NamePlates {
     pub(crate) fn vetoes(&self, frame: FrameHandle) -> bool {
         self.hit_test_vetoed && self.by_frame.contains_key(&frame)
     }
+
+    fn live_frames(&self) -> Vec<(u64, FrameHandle)> {
+        self.assigned
+            .iter()
+            .filter_map(|(&guid, &slot)| Some((guid, self.plates.get(slot)?.frame)))
+            .collect()
+    }
+}
+
+impl UiScript {
+    pub fn nameplate_guids(&self) -> Vec<u64> {
+        self.lua()
+            .app_data_ref::<Model>()
+            .map(|model| {
+                let plates = &model.nameplates;
+                plates
+                    .assigned
+                    .iter()
+                    .filter(|(_, &slot)| plates.plates.get(slot).is_some())
+                    .map(|(&guid, _)| guid)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn nameplate_frame(&self, guid: u64) -> Option<mlua::Table> {
+        let lua = self.lua();
+        let id = {
+            let mut model = lua.app_data_mut::<Model>()?;
+            let slot = *model.nameplates.assigned.get(&guid)?;
+            let frame = model.nameplates.plates.get(slot)?.frame;
+            model.frame_id(frame)
+        };
+        super::object::frame_wrapper(lua, id).ok()
+    }
+
+    pub fn nameplate_frames(&self) -> Vec<(u64, mlua::Table)> {
+        let lua = self.lua();
+        let ids: Vec<(u64, u32)> = {
+            let Some(mut model) = lua.app_data_mut::<Model>() else {
+                return Vec::new();
+            };
+            let frames = model.nameplates.live_frames();
+            frames
+                .into_iter()
+                .map(|(guid, frame)| (guid, model.frame_id(frame)))
+                .collect()
+        };
+        ids.into_iter()
+            .filter_map(|(guid, id)| Some((guid, super::object::frame_wrapper(lua, id).ok()?)))
+            .collect()
+    }
 }
 
 /// The flash a hit starts, in milliseconds (`0x7cba77`, `0x1388`).

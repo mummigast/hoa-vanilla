@@ -310,6 +310,7 @@ pub(super) fn control(
         Res<view_subject::FarSight>,
         // The pitch latch the calls left, which the frame's writes of the latch supersede.
         Option<ResMut<super::press::CallPitch>>,
+        Res<super::pad_steer::PadSteer>,
     ),
     mut commands: Commands,
     mut player: ResMut<Player>,
@@ -476,6 +477,18 @@ pub(super) fn control(
         pointer.2.move_speed,
         zoom_max,
     );
+    let steer = *speed_capsule.14;
+    let face_now = player.face_yaw;
+    pad_steer::steer_view(
+        &mut player.pad_hold,
+        face_now,
+        &mut rig,
+        &mut cam,
+        &steer,
+        dt,
+        pointer.2.move_speed,
+        zoom_max,
+    );
     glide_zoom(dt, &mut rig, zoom_max, pointer.2.move_speed);
     camera_view::step_pitch(&mut rig, &mut cam, dt);
 
@@ -611,6 +624,28 @@ pub(super) fn control(
             }
         }
         let axes = input::move_axes(binds, &mut player, both_buttons, may_translate, may_turn);
+        let driven_speeds = body.single().ok().and_then(|q| q.6).map(|s| s.0);
+        let holding_still = dash::held_still(driven_speeds);
+        player.dash.held = holding_still;
+        if let Some(driven) = driven_speeds {
+            match player.dash.watch_run_speed(driven.run) {
+                dash::RunSpeedEdge::DashStarted => {
+                    player.dash.start_fov_kick();
+                    let standing = axes.fwd == 0 && axes.side == 0;
+                    if standing && may_translate && player.airborne_since.is_none() {
+                        player.dash.start_standing_dash();
+                    }
+                }
+                dash::RunSpeedEdge::DashEnded { run } => {
+                    if player.airborne_since.is_some() {
+                        player.horiz_vel = dash::capped_horizontal(player.horiz_vel, run);
+                    }
+                }
+                dash::RunSpeedEdge::Steady => {}
+            }
+        }
+        let axes = player.dash.steer(axes, dt, holding_still);
+        let axes = pad_steer::steer_axes(axes, &steer, may_translate);
         let input::MoveAxes {
             fwd: fwd_axis,
             side: side_axis,
@@ -659,6 +694,16 @@ pub(super) fn control(
             player.face_yaw += drunk_wobble;
             turn_delta = drunk_wobble;
         }
+        let mut steered_face = player.face_yaw;
+        pad_steer::steer_facing(
+            &mut player.pad_hold,
+            &mut steered_face,
+            &cam,
+            &steer,
+            may_translate && may_turn,
+        );
+        player.face_yaw = steered_face;
+        rig.pad_holds_yaw = player.pad_hold.holding();
         let face_rot = Quat::from_rotation_y(player.face_yaw);
         let move_fwd = flat(face_rot * Vec3::NEG_Z);
         let move_right = flat(face_rot * Vec3::X);
@@ -741,7 +786,9 @@ pub(super) fn control(
         // `Jump` (`0x513bd0`) inlines `0x5144e0` and `0x514560`, which is `may_translate` term for
         // term: health, root and stand state 7. Hover's refusal is the movement handler's
         // (`0x7c623a`), which keeps the mounted flourish reachable while hovering.
-        let mut want_jump = binds.fired(crate::bindings::Input::Jump) && may_translate;
+        let mut want_jump = (binds.fired(crate::bindings::Input::Jump) || steer.jump)
+            && may_translate
+            && !holding_still;
 
         // Swim or walk, latched with hysteresis at the `0x6030c0` boundary against flicker.
         let surface_y = swim::surface_over_feet(world, player.pos);
@@ -767,6 +814,9 @@ pub(super) fn control(
             let (c, sn, xy) = (k.launch.cos_angle, k.launch.sin_angle, k.launch.xy_speed);
             wow_to_bevy([c * xy, sn * xy, -k.launch.zspeed])
         });
+        if let Some(k) = knockback {
+            player.dash.arm_air_dash(k.launch.xy_speed, k.launch.zspeed);
+        }
 
         // A knockback sets FALLING, which excludes SWIMMING; it brings its own launch, so the land
         // mover flies it, not `breach_step`.
@@ -872,6 +922,16 @@ pub(super) fn control(
             );
             swim_pitch = frame.pitch;
             frame.outcome
+        } else if holding_still && knock_launch.is_none() && !wire_jump {
+            mover::Outcome {
+                held: false,
+                grounded: player.airborne_since.is_none(),
+                jumped: false,
+                knocked: false,
+                air_nudged: false,
+                ground: None,
+                gated: false,
+            }
         } else {
             // Water walking hands the mover the liquid surface as ground ([`mover::water_floor`]),
             // where the reference ORs the liquid layers into the walk trace's class mask
@@ -906,8 +966,12 @@ pub(super) fn control(
         }
 
         let now = time.elapsed_secs();
-        if gated {
+        let arc_paused = holding_still || player.dash.flies_level();
+        if gated || (arc_paused && !swimming) {
             player.skip_arc_time(dt);
+        }
+        if player.dash.tick_air_dash(dt, jumped || !grounded) {
+            player.horiz_vel = dash::capped_horizontal(player.horiz_vel, speeds.run);
         }
         if gated != player.gated {
             player.gated = gated;

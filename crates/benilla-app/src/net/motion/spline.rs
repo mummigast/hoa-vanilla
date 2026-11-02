@@ -61,6 +61,23 @@ pub(crate) struct SplineStopped(pub(crate) u32);
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct HeldSpline;
 
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct Backstep;
+
+pub(crate) const BACKSTEP_MAX_MS: u32 = 400;
+
+pub(crate) fn is_backstep(start: [f32; 3], end: Option<[f32; 3]>, target: Option<[f32; 3]>, duration_ms: u32) -> bool {
+    if duration_ms <= BACKSTEP_MAX_MS {
+        return true;
+    }
+    let (Some(end), Some(target)) = (end, target) else {
+        return false;
+    };
+    let travel = [end[0] - start[0], end[1] - start[1]];
+    let toward = [target[0] - start[0], target[1] - start[1]];
+    travel[0] * toward[0] + travel[1] * toward[1] < 0.0
+}
+
 impl Spline {
     /// Average speed in yd/s (path length over duration); [`crate::creature_anim`] picks Walk or
     /// Run from it.
@@ -380,6 +397,13 @@ pub(in crate::net) fn trace_move_snap(
     );
 }
 
+const WALK_TURN_RATE: f32 = 12.0;
+
+fn smooth_walk_yaw(current: f32, goal: f32, dt: f32) -> f32 {
+    let delta = crate::creature_anim::wrap_pi(goal - current);
+    current + delta * (1.0 - (-WALK_TURN_RATE * dt).exp())
+}
+
 /// `WOW_CREATE_SPLINE=off` drops every create-block spline, freezing a unit at first sight until
 /// its next `SMSG_MONSTER_MOVE`: an A/B lever for [`create_spline`].
 fn create_spline_enabled() -> bool {
@@ -409,6 +433,8 @@ pub(in crate::net) fn sample_splines(
         Has<ActiveMover>,
         // The mover state the path's end stops ([`stop_at_path_end`]).
         Option<&mut crate::net::RemoteMotion>,
+        Has<crate::net::SelfPlayer>,
+        Has<Backstep>,
     )>,
     // A `Target` facing's unit when it is not on a path itself.
     standing: Query<&Transform, Without<Spline>>,
@@ -426,7 +452,7 @@ pub(in crate::net) fn sample_splines(
     // The paths that ended facing a unit, resolved once every path has moved this frame; `true`
     // for a deck path, whose rider takes the facing.
     let mut facing_targets: Vec<(Entity, u64, [f32; 3], bool)> = Vec::new();
-    for (entity, spline, mut t, swimming, guid, rider, net, store, mover, mut motion) in &mut q {
+    for (entity, spline, mut t, swimming, guid, rider, net, store, mover, mut motion, is_self, backstep) in &mut q {
         let unit_flags = store.map_or(0, |s| s.0.unit_flags());
         let (wow_pos, facing, pitch) = spline.sample(now);
         // A deck path's sample is the rider's transport-local pose, composed later this frame.
@@ -480,12 +506,20 @@ pub(in crate::net) fn sample_splines(
             } else {
                 (0.0, 0.0)
             };
-            t.rotation = if pitch != 0.0 || bank != 0.0 {
+            t.rotation = if backstep {
+                t.rotation
+            } else if pitch != 0.0 || bank != 0.0 {
                 Quat::from_rotation_y(f)
                     * Quat::from_rotation_x(pitch)
                     * Quat::from_rotation_z(bank)
-            } else {
+            } else if is_self {
                 Quat::from_rotation_y(f)
+            } else {
+                Quat::from_rotation_y(smooth_walk_yaw(
+                    t.rotation.to_euler(EulerRot::YXZ).0,
+                    f,
+                    time.delta_secs(),
+                ))
             };
         }
         // The mover walks the path, its position and, from the tangent, its facing written each
@@ -547,7 +581,7 @@ pub(in crate::net) fn sample_splines(
         let Some(f) = resolve_facing(MonsterMoveFacing::Target(guid), at, |_| target) else {
             continue;
         };
-        let Ok((_, _, mut t, _, _, rider, net, store, mover, motion)) = q.get_mut(entity) else {
+        let Ok((_, _, mut t, _, _, rider, net, store, mover, motion, _, _)) = q.get_mut(entity) else {
             continue;
         };
         if on_deck {
@@ -655,6 +689,8 @@ pub(crate) fn ground_derived(
 /// How far above the seat an idle unit's settle probe starts (yd): the swept-prism TOI
 /// (`0x632830`) still counts a face up to `1/36` yd (`[0x7ff9c8]`) behind the probe as a hit.
 const IDLE_UP_BAND: f32 = 1.0 / 36.0;
+const FAR_CLAMP_YARDS: f32 = 35.0;
+const FAR_CLAMP_EVERY_FRAMES: u32 = 4;
 /// How far below the seat the settle probe reaches (yd). The reference's settle reaches
 /// `d·1.849 + 1/36` and a body beyond it falls; an idle unit here has no fall, so a miss leaves it
 /// at its seat, which is also the airborne gate.
@@ -715,7 +751,11 @@ pub(in crate::net) fn ground_clamp_creatures(
         // The mover state a re-grounded unit's dead-reckoning goes on from.
         Option<&mut crate::net::RemoteMotion>,
     )>,
+    camera: Query<&GlobalTransform, With<benilla_world::view::WorldCamera>>,
+    mut frame: Local<u32>,
 ) {
+    *frame = frame.wrapping_add(1);
+    let eye = camera.single().ok().map(GlobalTransform::translation);
     let cost = clamp_cost_enabled();
     let legacy = clamp_seat_disabled();
     let t0 = cost.then(bevy::platform::time::Instant::now);
@@ -729,6 +769,7 @@ pub(in crate::net) fn ground_clamp_creatures(
     // What re-armed a cast: the unit's seat moved (`reseat`) or the colliders changed under it
     // (`armed`); a nonzero steady-state `armed` means the collider set is churning.
     let (mut reseat, mut armed) = (0u32, 0u32);
+    let mut jobs: Vec<ClampJob> = Vec::new();
 
     for (entity, net, spline, mut t, mut clamped, swimming, modes, embodied, mut motion) in &mut q {
         visited += 1;
@@ -803,107 +844,115 @@ pub(in crate::net) fn ground_clamp_creatures(
         // A continuing walker takes the swept step from last frame's pose with Δz = 0 (step-up
         // `H` 2.0) and keeps only Y, so it rides a hill its chord cuts under; an idle unit or a new
         // path settles down from the seat (`0x636dcd`-`0x636e45`, `d·1.849 + 1/36`).
+        let far = eye.is_some_and(|eye| eye.distance_squared(t.translation) > FAR_CLAMP_YARDS * FAR_CLAMP_YARDS);
+        if far && (frame.wrapping_add(entity.index_u32()) % FAR_CLAMP_EVERY_FRAMES) != 0 {
+            if let Some(c) = clamped.as_deref_mut().filter(|c| c.hit) {
+                let y = seat_y + (c.y_written - c.seat_y);
+                t.translation.y = y;
+                c.seat_y = seat_y;
+                c.y_written = y;
+                c.xz = xz;
+                held += 1;
+                continue;
+            }
+        }
         let path = spline.map(|s| (s.id, s.start));
         let continuing = clamped
             .as_deref()
-            .filter(|c| path.is_some() && c.path == path)
+            .filter(|c| !far && path.is_some() && c.path == path)
             .map(|c| (c.xz, c.y_written));
+        jobs.push(ClampJob {
+            entity,
+            pos: t.translation,
+            xz,
+            seat_y,
+            granted,
+            water,
+            hover,
+            path,
+            continuing,
+        });
+    }
+
+    let outcomes = cast_clamp_jobs(&world, &capsule.0, &jobs);
+    for (job, outcome) in jobs.iter().zip(outcomes) {
+        let Ok((entity, net, _, mut t, mut clamped, _, _, _, mut motion)) = q.get_mut(job.entity) else {
+            continue;
+        };
+        let (xz, seat_y, granted, path) = (job.xz, job.seat_y, job.granted, job.path);
         cast += 1;
-        let (y, hit_ground) = if let Some((pxz, py)) = continuing {
-            swept += 1;
-            let half_h = Vec3::Y * (crate::player::CAPSULE_HEIGHT * 0.5);
-            let from = Vec3::new(pxz[0], py, pxz[1]) + half_h;
-            // The frame's horizontal displacement as a one-second velocity: `grounded_step` travels
-            // `speed · dt`, and the reference's walk step takes a distance and a direction
-            // (`0x6367b0`).
-            let delta = Vec3::new(xz[0] - pxz[0], 0.0, xz[1] - pxz[1]);
-            let g = crate::player::mover::grounded_step(
-                &world,
-                &capsule.0,
-                from,
-                delta,
-                Duration::from_secs(1),
-                crate::player::mover::Support {
-                    rise: crate::player::CREATURE_STEP_UP_HEIGHT,
-                    offset: if hover {
-                        crate::player::HOVER_HEIGHT
-                    } else {
-                        0.0
-                    },
-                    water,
-                    // Per-frame state the memo does not keep; the path's next sample corrects a
-                    // miss on a steep face.
-                    steep: false,
-                },
-            );
-            // A sweep that finds no floor holds the server's pose, as `grounded_y` does: the step's
-            // no-floor drop would ratchet below a surface the one-sided cast cannot find again.
-            let y = if g.unsupported.is_some() {
-                seat_y
-            } else {
-                g.center.y - half_h.y
-            };
-            if benilla_assets::trace::enabled_for("clmp")
-                && clamp_trace_display().is_some_and(|d| net.display_id == Some(d))
-            {
-                let z_of = |y: f32| bevy_to_wow(Vec3::new(0.0, y, 0.0))[2];
-                benilla_assets::trace::line(
-                    "clmp",
-                    &format!(
-                        "display={} walk from_z={:.3} seat_z={:.3} d={:.3} ground={} z={:.3}",
-                        net.display_id.unwrap_or(0),
-                        z_of(py),
-                        z_of(seat_y),
-                        delta.length(),
-                        g.ground.is_some() as u8,
-                        z_of(y),
-                    ),
-                );
-            }
-            if g.unsupported.is_some() {
-                noflr += 1;
-                if seat_y - y > 1.0e-4 {
-                    ratchet += 1;
-                    if seat_y - y > deepest {
-                        deepest = seat_y - y;
-                        worst = Some((net.display_id.unwrap_or(0), xz, y));
+        let (y, hit_ground) = match outcome {
+            ClampOutcome::Swept {
+                y,
+                ground,
+                unsupported,
+                from_y: py,
+                delta_len,
+            } => {
+                swept += 1;
+                if benilla_assets::trace::enabled_for("clmp")
+                    && clamp_trace_display().is_some_and(|d| net.display_id == Some(d))
+                {
+                    let z_of = |y: f32| bevy_to_wow(Vec3::new(0.0, y, 0.0))[2];
+                    benilla_assets::trace::line(
+                        "clmp",
+                        &format!(
+                            "display={} walk from_z={:.3} seat_z={:.3} d={:.3} ground={} z={:.3}",
+                            net.display_id.unwrap_or(0),
+                            z_of(py),
+                            z_of(seat_y),
+                            delta_len,
+                            ground as u8,
+                            z_of(y),
+                        ),
+                    );
+                }
+                if unsupported {
+                    noflr += 1;
+                    if seat_y - y > 1.0e-4 {
+                        ratchet += 1;
+                        if seat_y - y > deepest {
+                            deepest = seat_y - y;
+                            worst = Some((net.display_id.unwrap_or(0), xz, y));
+                        }
                     }
                 }
+                (y, ground)
             }
-            (y, g.ground.is_some())
-        } else {
-            let origin = Vec3::new(t.translation.x, seat_y + IDLE_UP_BAND, t.translation.z);
-            let reach = IDLE_UP_BAND + GROUND_CLAMP_DOWN;
-            // One-sided, as the player mover grounds: a face wound away is no floor.
-            let hit = world.ray_body(origin, Dir3::NEG_Y, reach);
-            let floor = hit.as_ref().map(|h| origin.y - h.distance);
-            let y = grounded_y(seat_y, floor, water, hover);
-            // The `clmp` trace for one display (`WOW_CLAMP_TRACE=<display id>`): per cast, the
-            // seat, the ray origin, the hit and the Z written, in WoW coordinates.
-            if benilla_assets::trace::enabled_for("clmp")
-                && clamp_trace_display().is_some_and(|d| net.display_id == Some(d))
-            {
-                let seat = bevy_to_wow(Vec3::new(t.translation.x, seat_y, t.translation.z));
-                let z_of = |y: f32| bevy_to_wow(Vec3::new(0.0, y, 0.0))[2];
-                let hit_s = hit.as_ref().map_or("miss".to_string(), |h| {
-                    format!("hit d={:.3} n.y={:+.3}", h.distance, h.normal.y)
-                });
-                benilla_assets::trace::line(
-                    "clmp",
-                    &format!(
-                        "display={} idle seat=({:.2},{:.2},{:.3}) origin_z={:.3} reach={:.2} {hit_s} floor_z={} z={:.3}",
-                        net.display_id.unwrap_or(0),
-                        seat[0],
-                        seat[1],
-                        seat[2],
-                        z_of(origin.y),
-                        reach,
-                        floor.map_or("-".to_string(), |f| format!("{:.3}", z_of(f))),
-                        z_of(y),
-                    ),
-                );
+            ClampOutcome::Idle {
+                y,
+                origin_y,
+                reach,
+                hit,
+                floor,
+            } => {
+                // The `clmp` trace for one display (`WOW_CLAMP_TRACE=<display id>`): per cast, the
+                // seat, the ray origin, the hit and the Z written, in WoW coordinates.
+                if benilla_assets::trace::enabled_for("clmp")
+                    && clamp_trace_display().is_some_and(|d| net.display_id == Some(d))
+                {
+                    let seat = bevy_to_wow(Vec3::new(t.translation.x, seat_y, t.translation.z));
+                    let z_of = |y: f32| bevy_to_wow(Vec3::new(0.0, y, 0.0))[2];
+                    let hit_s = hit.map_or("miss".to_string(), |(distance, normal_y)| {
+                        format!("hit d={distance:.3} n.y={normal_y:+.3}")
+                    });
+                    benilla_assets::trace::line(
+                        "clmp",
+                        &format!(
+                            "display={} idle seat=({:.2},{:.2},{:.3}) origin_z={:.3} reach={:.2} {hit_s} floor_z={} z={:.3}",
+                            net.display_id.unwrap_or(0),
+                            seat[0],
+                            seat[1],
+                            seat[2],
+                            z_of(origin_y),
+                            reach,
+                            floor.map_or("-".to_string(), |f| format!("{:.3}", z_of(f))),
+                            z_of(y),
+                        ),
+                    );
+                }
+                (y, hit.is_some())
             }
-            (y, hit.is_some())
         };
         if hit_ground {
             hit_n += 1;
@@ -948,6 +997,127 @@ pub(in crate::net) fn ground_clamp_creatures(
             ),
             t0.elapsed().as_secs_f32() * 1000.0
         );
+    }
+}
+
+struct ClampJob {
+    entity: Entity,
+    pos: Vec3,
+    xz: [f32; 2],
+    seat_y: f32,
+    granted: crate::net::UnitMoveModes,
+    water: Option<f32>,
+    hover: bool,
+    path: Option<(u32, Instant)>,
+    continuing: Option<([f32; 2], f32)>,
+}
+
+enum ClampOutcome {
+    Swept {
+        y: f32,
+        ground: bool,
+        unsupported: bool,
+        from_y: f32,
+        delta_len: f32,
+    },
+    Idle {
+        y: f32,
+        origin_y: f32,
+        reach: f32,
+        hit: Option<(f32, f32)>,
+        floor: Option<f32>,
+    },
+}
+
+const CLAMP_JOBS_PER_TASK: usize = 8;
+
+fn cast_clamp_jobs(
+    world: &benilla_world::collision::WorldCollision,
+    capsule: &avian3d::prelude::Collider,
+    jobs: &[ClampJob],
+) -> Vec<ClampOutcome> {
+    use bevy::tasks::{ComputeTaskPool, ParallelSlice};
+    if jobs.len() <= CLAMP_JOBS_PER_TASK {
+        return jobs
+            .iter()
+            .map(|j| cast_clamp_job(world, capsule, j))
+            .collect();
+    }
+    let pool = ComputeTaskPool::get();
+    let chunk = jobs
+        .len()
+        .div_ceil(pool.thread_num().max(1) * 2)
+        .max(CLAMP_JOBS_PER_TASK);
+    jobs.par_chunk_map(pool, chunk, |_, chunk| {
+        chunk
+            .iter()
+            .map(|j| cast_clamp_job(world, capsule, j))
+            .collect::<Vec<_>>()
+    })
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn cast_clamp_job(
+    world: &benilla_world::collision::WorldCollision,
+    capsule: &avian3d::prelude::Collider,
+    job: &ClampJob,
+) -> ClampOutcome {
+    let (xz, seat_y, water, hover) = (job.xz, job.seat_y, job.water, job.hover);
+    if let Some((pxz, py)) = job.continuing {
+        let half_h = Vec3::Y * (crate::player::CAPSULE_HEIGHT * 0.5);
+        let from = Vec3::new(pxz[0], py, pxz[1]) + half_h;
+        // The frame's horizontal displacement as a one-second velocity: `grounded_step` travels
+        // `speed · dt`, and the reference's walk step takes a distance and a direction
+        // (`0x6367b0`).
+        let delta = Vec3::new(xz[0] - pxz[0], 0.0, xz[1] - pxz[1]);
+        let g = crate::player::mover::grounded_step(
+            world,
+            capsule,
+            from,
+            delta,
+            Duration::from_secs(1),
+            crate::player::mover::Support {
+                rise: crate::player::CREATURE_STEP_UP_HEIGHT,
+                offset: if hover {
+                    crate::player::HOVER_HEIGHT
+                } else {
+                    0.0
+                },
+                water,
+                // Per-frame state the memo does not keep; the path's next sample corrects a
+                // miss on a steep face.
+                steep: false,
+            },
+        );
+        // A sweep that finds no floor holds the server's pose, as `grounded_y` does: the step's
+        // no-floor drop would ratchet below a surface the one-sided cast cannot find again.
+        let y = if g.unsupported.is_some() {
+            seat_y
+        } else {
+            g.center.y - half_h.y
+        };
+        ClampOutcome::Swept {
+            y,
+            ground: g.ground.is_some(),
+            unsupported: g.unsupported.is_some(),
+            from_y: py,
+            delta_len: delta.length(),
+        }
+    } else {
+        let origin = Vec3::new(job.pos.x, seat_y + IDLE_UP_BAND, job.pos.z);
+        let reach = IDLE_UP_BAND + GROUND_CLAMP_DOWN;
+        // One-sided, as the player mover grounds: a face wound away is no floor.
+        let hit = world.ray_body(origin, Dir3::NEG_Y, reach);
+        let floor = hit.as_ref().map(|h| origin.y - h.distance);
+        ClampOutcome::Idle {
+            y: grounded_y(seat_y, floor, water, hover),
+            origin_y: origin.y,
+            reach,
+            hit: hit.map(|h| (h.distance, h.normal.y)),
+            floor,
+        }
     }
 }
 
@@ -1119,6 +1289,21 @@ pub(in crate::net) fn mark_swimming_creatures(
 
 /// A unit created inside a building whose floor collider has not attached yet, and what happens
 /// to it when the floor lands: the seat lets the probe reach the floor, the epoch makes it re-ask.
+#[cfg(test)]
+mod backstep {
+    use super::is_backstep;
+
+    #[test]
+    fn moving_away_from_the_faced_target_keeps_facing() {
+        let start = [0.0, 0.0, 0.0];
+        let hero = Some([5.0, 0.0, 0.0]);
+        assert!(is_backstep(start, Some([-3.0, 0.0, 0.0]), hero, 900));
+        assert!(!is_backstep(start, Some([3.0, 0.0, 0.0]), hero, 900));
+        assert!(is_backstep(start, Some([3.0, 0.0, 0.0]), hero, 200));
+        assert!(!is_backstep(start, None, None, 900));
+    }
+}
+
 #[cfg(test)]
 mod under_floor {
     use avian3d::prelude::*;
@@ -2361,6 +2546,89 @@ mod inside_a_hull {
             (y_of(&app, npc) - 2.0).abs() < 1e-3,
             "a new path is seated from the server's own Z: {}",
             y_of(&app, npc)
+        );
+    }
+    fn bumpy_terrain(app: &mut App) {
+        let n = 60usize;
+        let cell = 2.0f32;
+        let h = |i: usize, j: usize| {
+            let (x, z) = (i as f32 * cell, j as f32 * cell);
+            (x * 0.21).sin() * 1.7 + (z * 0.13).cos() * 2.3 + ((i * 7 + j * 13) % 5) as f32 * 0.05
+        };
+        let mut verts = Vec::new();
+        for i in 0..=n {
+            for j in 0..=n {
+                verts.push(Vec3::new(i as f32 * cell - 60.0, h(i, j), j as f32 * cell - 60.0));
+            }
+        }
+        let mut tris = Vec::new();
+        let at = |i: usize, j: usize| (i * (n + 1) + j) as u32;
+        for i in 0..n {
+            for j in 0..n {
+                tris.push([at(i, j), at(i, j + 1), at(i + 1, j + 1)]);
+                tris.push([at(i, j), at(i + 1, j + 1), at(i + 1, j)]);
+            }
+        }
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::trimesh(verts, tris),
+            Transform::default(),
+        ));
+        for k in 0..12 {
+            let c = Vec3::new(-40.0 + 7.0 * k as f32, 1.0, -30.0 + 5.0 * k as f32);
+            box_hull(app, c - Vec3::new(1.5, 2.0, 1.5), c + Vec3::new(1.5, 1.0, 1.5));
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_clamp_census_scene() {
+        let mut app = world();
+        bumpy_terrain(&mut app);
+        let units: Vec<Entity> = (0..110)
+            .map(|k| {
+                let x = -45.0 + (k % 11) as f32 * 8.0;
+                let z = -45.0 + (k / 11) as f32 * 8.0;
+                spawn_unit(&mut app, Vec3::new(x, 4.0, z))
+            })
+            .collect();
+        app.update();
+        for (k, &u) in units.iter().enumerate() {
+            if k % 10 != 9 {
+                path(&mut app, u, k as u32 + 1, [0.0; 3], [1.0, 0.0, 0.0], 60);
+            }
+        }
+        let mut schedule = Schedule::default();
+        schedule.add_systems(ground_clamp_creatures);
+        let mut samples = Vec::new();
+        let mut digest: u64 = 0xcbf29ce484222325;
+        for frame in 0..300 {
+            for (k, &u) in units.iter().enumerate() {
+                let mut t = app.world_mut().get_mut::<Transform>(u).unwrap();
+                if k % 10 != 9 {
+                    let a = k as f32 * 0.7;
+                    t.translation.x += 0.12 * a.cos();
+                    t.translation.z += 0.12 * a.sin();
+                } else if frame % 30 == 0 {
+                    t.translation.y += 0.5;
+                }
+            }
+            let t0 = std::time::Instant::now();
+            schedule.run(app.world_mut());
+            if frame >= 30 {
+                samples.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+            for &u in &units {
+                let y = app.world().get::<Transform>(u).unwrap().translation.y;
+                digest = (digest ^ u64::from(y.to_bits())).wrapping_mul(0x100000001b3);
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "[bench] ground_clamp_creatures median={:.3} ms p10={:.3} p90={:.3} digest={digest:016x}",
+            samples[samples.len() / 2],
+            samples[samples.len() / 10],
+            samples[samples.len() * 9 / 10]
         );
     }
 }

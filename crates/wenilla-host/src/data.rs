@@ -30,6 +30,8 @@ use tower_http::set_header::SetResponseHeaderLayer;
 pub struct DataState {
     pub chain: Arc<Chain>,
     index: Arc<IndexCache>,
+    /// Loose `Interface` files answered before the chain ([`crate::overlay`]).
+    overlay: Option<Arc<crate::overlay::Overlay>>,
 }
 
 /// Single-flight initialization; transient list errors are retried on the next request.
@@ -61,6 +63,11 @@ impl IndexCache {
 /// Build the `/data/*` router. Kept separate from `static_site`'s and `ws`'s so `main.rs` can
 /// merge them with `Router::merge` and each test file can stand its half up alone.
 pub fn router(chain: Arc<Chain>) -> Router {
+    router_with_overlay(chain, None)
+}
+
+/// [`router`] with a loose-file [`crate::overlay::Overlay`] in front of the chain.
+pub fn router_with_overlay(chain: Arc<Chain>, overlay: Option<crate::overlay::Overlay>) -> Router {
     Router::new()
         .route("/data/__index", get(index))
         // axum's matchit picks the more specific literal route above over this wildcard on its
@@ -83,6 +90,7 @@ pub fn router(chain: Arc<Chain>) -> Router {
         .with_state(DataState {
             chain,
             index: Arc::default(),
+            overlay: overlay.map(Arc::new),
         })
 }
 
@@ -142,6 +150,25 @@ async fn file(method: Method, uri: Uri, State(state): State<DataState>) -> Respo
     // name and yields a `&'static str`, so it costs nothing to take it out of the task's way.
     let content_type = content_type(&name);
 
+    // A loose file changes under its name (an addon update, the server's stats file), so the
+    // browser revalidates it every time instead of keeping it for a year.
+    if let Some(path) = state.overlay.as_ref().and_then(|o| o.find(&name)) {
+        return match tokio::fs::read(&path).await {
+            Ok(bytes) => {
+                let body = if method == Method::HEAD { Vec::new() } else { bytes };
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")],
+                    body,
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, path = %path.display(), "overlay read failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
+    }
     let chain = Arc::clone(&state.chain);
     // `Chain::read` does synchronous file I/O (through benilla-mpq's blocking reads); running it
     // on the async runtime thread would stall every other in-flight request behind one disk seek.
@@ -184,11 +211,22 @@ async fn file(method: Method, uri: Uri, State(state): State<DataState>) -> Respo
 /// (Lane A) to mirror the native directory walk it can't do in a browser.
 async fn index(State(state): State<DataState>) -> Response {
     let chain = Arc::clone(&state.chain);
+    let overlay = state.overlay.clone();
     let listed = state
         .index
         .get(move || {
             let entries = chain.list()?;
-            let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+            let mut names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
+            if let Some(overlay) = overlay {
+                let known: std::collections::HashSet<String> =
+                    names.iter().map(|n| n.to_ascii_lowercase()).collect();
+                names.extend(
+                    overlay
+                        .names()
+                        .into_iter()
+                        .filter(|n| !known.contains(&n.to_ascii_lowercase())),
+                );
+            }
             Ok(serde_json::to_vec(&names)?)
         })
         .await;

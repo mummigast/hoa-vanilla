@@ -46,11 +46,13 @@ mod camera_saved;
 mod camera_water;
 // The five named camera views, inside `player/` to write the rig's `pub(super)` fields.
 pub(crate) mod camera_view;
+mod dash;
 pub(crate) mod drunk;
 mod edge;
 mod embody;
 mod flags;
 mod follow;
+pub(crate) mod pad_steer;
 
 mod gait;
 mod input;
@@ -368,6 +370,7 @@ impl Plugin for PlayerPlugin {
                     .in_set(crate::vm_pass::VmPass::Member),
             );
         app.init_resource::<camera::LookConfig>();
+        app.init_resource::<pad_steer::PadSteer>();
         app.init_resource::<camera_zoom::ZoomLimit>();
         app.init_resource::<camera::FollowConfig>();
         app.init_resource::<OwnControlLost>();
@@ -459,6 +462,13 @@ impl Plugin for PlayerPlugin {
             mirror_mover_collision_height
                 .in_set(WorldStage::Input)
                 .before(control),
+        )
+        .add_systems(
+            Update,
+            dash::freeze_world_while_held
+                .in_set(WorldStage::Input)
+                .after(control)
+                .after(wire_in::release_on_session_end),
         )
         // The shake adds its offset after `control` seats the camera, so its distance falloff
         // measures the unshaken eye.

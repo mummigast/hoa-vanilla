@@ -18,10 +18,10 @@ use benilla_world::model_fade::DespawnFade;
 use benilla_world::vis_chain::VisChainOnly;
 
 use super::motion::{
-    catch_up, create_spline, far_stop, gameobject_rotation, monster_move_spline, pose_transform,
-    resolve_facing, ridden_create_path, set_raw_facing, smoothed, snap_from_three_yards,
-    trace_create_spline, trace_move_snap, wire_yaw, write_pose, HeldSpline, MoverWorld,
-    SplineStopped, ROOT_APPLY_WIPE,
+    catch_up, create_spline, far_stop, gameobject_rotation, is_backstep, monster_move_spline,
+    pose_transform, resolve_facing, ridden_create_path, set_raw_facing, smoothed,
+    snap_from_three_yards, trace_create_spline, trace_move_snap, wire_yaw, write_pose, Backstep,
+    HeldSpline, MoverWorld, SplineStopped, ROOT_APPLY_WIPE,
 };
 use super::{
     ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp, ObjectStore,
@@ -1593,6 +1593,22 @@ fn monster_move(
             stop,
             duration_ms,
         );
+        // A path that runs away from the unit it faces is a backstep, which the anim selector plays.
+        let backstep = match facing {
+            MonsterMoveFacing::Target(target) => {
+                let target_pos = index
+                    .0
+                    .get(&target)
+                    .and_then(|&te| transforms.get(te).ok())
+                    .map(|t| bevy_to_wow(t.translation));
+                is_backstep(start, path.last().copied(), target_pos, duration_ms)
+            }
+            _ => false,
+        };
+        let path = match transport {
+            None => start_where_drawn(path, transforms.get(e).ok().map(|t| bevy_to_wow(t.translation))),
+            Some(_) => path,
+        };
         // A rooted unit takes no path: `0x6187a0`, the only route into the spline installer
         // `0x7c6a50`, returns on ROOT (`0x6187c2`). Only the path is refused: the un-nock tail runs
         // on every path (`0x6020ef`), and the rest for a rooted unit is untraced.
@@ -1707,7 +1723,13 @@ fn monster_move(
         // selector's `unify`) and stops where it ends.
         match spline {
             Some(spline) => {
-                commands.entity(e).insert(spline).remove::<SplineStopped>();
+                let mut entity = commands.entity(e);
+                entity.insert(spline).remove::<SplineStopped>();
+                if backstep {
+                    entity.insert(Backstep);
+                } else {
+                    entity.remove::<Backstep>();
+                }
             }
             // A stop keeps the id, which the server awaits back for a player-driven unit.
             None => {
@@ -1770,6 +1792,21 @@ fn flush_queued(
 /// (`0x7c6dd0`), the pitch (`0x7c6e30`), the strafe (`0x7c6ce0`), the move (`0x7c6c00`), and
 /// `0x6000` (`and 0xffff9fff`); swimming, walking and the root stay.
 const PATH_START_STOP: u32 = 0x041F_E0FF;
+
+const NEW_PATH_STARTS_WHERE_DRAWN: bool = true;
+const DRAWN_START_MAX_GAP: f32 = 3.0;
+
+fn start_where_drawn(mut path: Vec<[f32; 3]>, drawn: Option<[f32; 3]>) -> Vec<[f32; 3]> {
+    let (Some(drawn), Some(first)) = (drawn, path.first_mut()) else {
+        return path;
+    };
+    let gap = (drawn[0] - first[0]).hypot(drawn[1] - first[1]);
+    if NEW_PATH_STARTS_WHERE_DRAWN && gap < DRAWN_START_MAX_GAP {
+        first[0] = drawn[0];
+        first[1] = drawn[1];
+    }
+    path
+}
 
 /// This unit's granted modes; no component means all bits clear.
 fn modes_of(guid: u64, index: &GuidIndex, modes: &Query<&mut UnitMoveModes>) -> UnitMoveModes {

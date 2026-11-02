@@ -204,6 +204,7 @@ mod ui_world_enter;
 mod ui_world_map;
 mod video;
 mod vm_pass;
+mod vm_seed;
 mod vplates;
 mod wdb;
 mod weapon_trail;
@@ -230,8 +231,13 @@ pub use benilla_world::worldview::run as run_worldview;
 pub use bevy::app::AppExit;
 // A crate on top of benilla reads objects and interacts through these, with no protocol dependency.
 pub use benilla_protocol::{messages::ObjectType, ObjectFields};
+pub use creature_anim::fx_anchor::{AnchorFx, FxAnchor};
+pub use ui_chat::{ChatTap, TappedLine};
 pub use net::Objects;
+pub use entities::ViewerOverheadHeight;
+pub use player::pad_steer::PadSteer;
 pub use target::Interact;
+pub use vm_seed::{run_hosted, seed_every_vm};
 
 /// Builds and runs the client app. `build` is the launcher's compile-time git stamp, passed in as
 /// data so the sha lives in the shim's fingerprint and a commit does not recompile this crate.

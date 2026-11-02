@@ -1120,6 +1120,7 @@ fn the_display_mode_dropdown_maps_its_entries_to_the_gx_window_polarity() {
         s.take_cvar_changes().is_empty(),
         "reading the table on select must not write it back"
     );
+    assert_eq!(s.take_restart_gx_asks(), 0);
 
     // Two entries: there is no exclusive fullscreen, as in modern Classic.
     s.run(&format!("{ROW}DropdownButton:Click()")).unwrap();
@@ -1136,6 +1137,11 @@ fn the_display_mode_dropdown_maps_its_entries_to_the_gx_window_polarity() {
     assert_eq!(
         s.take_cvar_changes(),
         vec![("gxWindow".to_string(), "1".to_string())]
+    );
+    assert_eq!(
+        s.take_restart_gx_asks(),
+        1,
+        "a latched gxWindow pick applies only through RestartGx"
     );
     assert_eq!(
         s.eval::<String>(&format!("return {ROW}DropdownText:GetText()"))
@@ -1404,7 +1410,7 @@ fn the_nameplates_page_toggles_the_unit_name_cvars() {
     }
     // The name rows at the reference's registered defaults: player, guild and titles "1", NPC and
     // own "0".
-    for row in ["RowPlayerNames", "RowGuildNames", "RowPlayerTitles"] {
+    for row in ["RowPlayerNames", "RowGuildNames", "RowPlayerTitles", "RowNpcNames"] {
         assert!(
             s.eval::<bool>(&format!(
                 "return BenillaOptionsFrameContainerBodyNameplates{row}Check:GetChecked()"
@@ -1413,7 +1419,7 @@ fn the_nameplates_page_toggles_the_unit_name_cvars() {
             "{row} defaults checked"
         );
     }
-    for row in ["RowNpcNames", "RowOwnName"] {
+    for row in ["RowOwnName"] {
         assert!(
             !s.eval::<bool>(&format!(
                 "return BenillaOptionsFrameContainerBodyNameplates{row}Check:GetChecked()"
@@ -1472,20 +1478,20 @@ fn the_nameplates_page_toggles_the_unit_name_cvars() {
         .unwrap();
     assert_eq!(
         s.take_cvar_changes(),
-        vec![("UnitNameNPC".to_string(), "1".to_string())]
-    );
-    assert!(s
-        .take_sounds()
-        .contains(&SoundRequest::KitName("igMainMenuOptionCheckBoxOn".into())));
-    s.run("BenillaOptionsFrameContainerBodyNameplatesRowNpcNamesCheck:Click()")
-        .unwrap();
-    assert_eq!(
-        s.take_cvar_changes(),
         vec![("UnitNameNPC".to_string(), "0".to_string())]
     );
     assert!(s
         .take_sounds()
         .contains(&SoundRequest::KitName("igMainMenuOptionCheckBoxOff".into())));
+    s.run("BenillaOptionsFrameContainerBodyNameplatesRowNpcNamesCheck:Click()")
+        .unwrap();
+    assert_eq!(
+        s.take_cvar_changes(),
+        vec![("UnitNameNPC".to_string(), "1".to_string())]
+    );
+    assert!(s
+        .take_sounds()
+        .contains(&SoundRequest::KitName("igMainMenuOptionCheckBoxOn".into())));
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

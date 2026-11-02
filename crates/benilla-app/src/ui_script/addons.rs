@@ -308,6 +308,33 @@ fn chain_addons() -> Vec<Addon> {
         .collect()
 }
 
+/// The browser's stand-in for the loose pass: `Interface\AddOns\wenilla-addons.txt` on the chain
+/// (the host serves it beside the archives) names one addon folder per line, and each loads off
+/// the chain with its manifest's files made chain paths. LoadOnDemand or not, as its `.toc` says.
+#[cfg(target_arch = "wasm32")]
+fn web_chain_addons() -> Vec<Addon> {
+    let Some(list) = super::reference_ui::read("Interface/AddOns/wenilla-addons.txt") else {
+        return Vec::new();
+    };
+    benilla_ui::source::decode(&list)
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.starts_with('#'))
+        .filter_map(|name| {
+            let bytes = super::reference_ui::read(&format!("Interface/AddOns/{name}/{name}.toc"))?;
+            let mut toc = Toc::parse(&benilla_ui::source::decode(&bytes));
+            for file in &mut toc.files {
+                *file = format!("Interface/AddOns/{name}/{}", file.replace('\\', "/"));
+            }
+            Some(Addon {
+                name: name.to_string(),
+                toc,
+                source: Source::Chain,
+            })
+        })
+        .collect()
+}
+
 /// Every registered addon in registration order, the archive pass before the loose folders and a
 /// name's first registration winning: `AddOn_ScanAddOnDir 0x51c760` walks each archive's
 /// `(listfile)` in line order (`0x401470`, `0x648fb0`) before the `FindFirstFileW` walk
@@ -317,6 +344,9 @@ fn chain_addons() -> Vec<Addon> {
 fn discover() -> Vec<Addon> {
     // The archive pass, in `BLIZZARD_ADDONS` order: the shipped `patch.MPQ` listfile's too.
     let mut found = chain_addons();
+    // The page has no AddOns folder: the host lists the player's addons on the chain instead.
+    #[cfg(target_arch = "wasm32")]
+    found.extend(web_chain_addons());
     // The loose pass, minus the names the archive registered.
     let seen: HashSet<String> = found.iter().map(|a| a.name.to_ascii_lowercase()).collect();
     found.extend(

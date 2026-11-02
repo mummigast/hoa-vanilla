@@ -199,6 +199,8 @@ pub(super) fn expand_quads(
             (cy * inv_rows, (cy + 1.0) * inv_rows),
         )
     };
+    let quads_per_particle = if def.head_tail == 2 { 2 } else { 1 };
+    out.reserve(particles.len() * 4 * quads_per_particle);
     // A sorted emitter writes its particles back to front (`0x7b3a1b`), every other one in its
     // live-list order (`0x7b3bf2`); between clouds, each draw record's anchor sorts it.
     let (mut by_depth, mut in_pool);
@@ -235,13 +237,12 @@ pub(super) fn expand_quads(
         // flagged instance scale; a twinkle range with min == max burns steady.
         let half = size * def.twinkle(noise) * scale;
         let mut push_quad = |corners: [Vec3; 4], quv: [[f32; 2]; 4]| {
-            for (c, t) in corners.iter().zip(quv) {
-                out.push(EffectVertex {
-                    pos: c.to_array(),
-                    uv: t,
-                    color: rgba,
-                });
-            }
+            let vertex = |i: usize| EffectVertex {
+                pos: corners[i].to_array(),
+                uv: quv[i],
+                color: rgba,
+            };
+            out.extend_from_slice(&[vertex(0), vertex(1), vertex(2), vertex(3)]);
         };
         // Head quad (particleType 0 or 2), drawn first (`0x7b2bc9`): a billboard, or the XY plane.
         if def.head_tail != 1 {

@@ -41,6 +41,10 @@ struct Cli {
     /// itself runs against, so it defaults to loopback.
     #[arg(long, default_value = "127.0.0.1")]
     upstream: String,
+    /// A game folder whose loose `Interface\GlueXML` and `Interface\AddOns` files are served
+    /// over the chain's, as the native client reads them beside `Data`.
+    #[arg(long)]
+    overlay: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -55,7 +59,8 @@ async fn main() -> Result<()> {
     );
     tracing::info!(data = %cli.data.display(), "patch chain open");
 
-    let app = wenilla_host::data::router(chain)
+    let overlay = cli.overlay.clone().map(wenilla_host::overlay::Overlay::new);
+    let app = wenilla_host::data::router_with_overlay(chain, overlay)
         .merge(wenilla_host::ws::router(
             cli.upstream.clone(),
             wenilla_host::ALLOWED_PORTS,

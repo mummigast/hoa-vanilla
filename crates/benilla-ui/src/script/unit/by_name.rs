@@ -310,6 +310,18 @@ impl super::super::UiScript {
         }
     }
 
+    pub fn set_name_candidate_dists(&mut self, dists: &[(u64, f32)]) {
+        if dists.is_empty() {
+            return;
+        }
+        let mut model = self.model_mut();
+        for &(guid, dist2) in dists {
+            if let Some(c) = model.name_candidates.get_mut(&guid) {
+                c.dist2 = dist2;
+            }
+        }
+    }
+
     /// Seat the selection a script call just committed as `"target"` for the rest of its chunk,
     /// `None` for nothing selected: every selecting verb commits through `SetSelection 0x493540`
     /// before it returns, so `UnitName("target")` on the next line names the new unit. The view is

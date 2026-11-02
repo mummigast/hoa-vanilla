@@ -127,8 +127,9 @@ const SKULL_SIZE: f32 = 0.01;
 const RAID_ICON_SIZE: f32 = 0.02;
 /// `[0x80abfc]`.
 const PLATE_LIFT: f32 = 2.0 / 3.0;
-/// 20 yd squared, `[0xc4d988]` (set from `0x5fa130`).
-const MAX_DIST_SQ: f32 = 20.0 * 20.0;
+const PLATE_RANGE_YD: f32 = 40.0;
+const NATIVE_PLATE_SPREAD: bool = false;
+const MAX_DIST_SQ: f32 = PLATE_RANGE_YD * PLATE_RANGE_YD;
 /// `CreatureType.dbc` id 11, Totem: a friendly one gets no plate (`0x60f757` `cmp eax,0xb`).
 const CREATURE_TYPE_TOTEM: u32 = 11;
 /// Deviation: the reference dims non-target plates to `0x7F`; raised because that fades them too
@@ -572,7 +573,11 @@ fn drive_vplates(
                 screen.x + pw * 0.5,
                 screen.y + ph,
             );
-            let solved = bucket.resolve(desired, viewport);
+            let solved = if NATIVE_PLATE_SPREAD {
+                bucket.resolve(desired, viewport)
+            } else {
+                desired
+            };
             // Snap the left edge, not the centre, which an odd width would put between texels; the
             // claim takes the snapped rect, so later plates dodge what is drawn.
             let top = device_snap(solved.min.y, scale);
