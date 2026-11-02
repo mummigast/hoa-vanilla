@@ -25,8 +25,12 @@ pub use world::{
     WorldConnectEvent, WorldReader, WorldSession, WorldWriter, WORLD_PORT,
 };
 
+use std::io::Write;
 #[cfg(not(target_arch = "wasm32"))]
 use std::net::SocketAddr;
+use std::sync::Mutex;
+use std::time::Duration;
+
 use anyhow::{anyhow, Context, Result};
 use benilla_srp::{NormalizedString, PublicKey, SrpClientChallenge, SESSION_KEY_LENGTH};
 
@@ -137,8 +141,74 @@ fn first_ipv4(addrs: &[SocketAddr]) -> Option<SocketAddr> {
 
 /// Dial a realm's world server at its realm-list address ([`world_host_port`]).
 pub(crate) async fn dial_world(address: &str) -> Result<Conn> {
+    if let Some(gate) = current_gate() {
+        return dial_gate(&gate, GateLeg::World).await;
+    }
     let (host, port) = world_host_port(address);
     dial(host, port).await
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Gate {
+    pub address: String,
+    pub token: String,
+}
+
+#[derive(Clone, Copy)]
+enum GateLeg {
+    Login,
+    World,
+}
+
+const GATE_ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
+const GATE_ANSWER_LIMIT: usize = 64;
+
+static GATE: Mutex<Option<Gate>> = Mutex::new(None);
+
+pub fn set_gate(gate: Option<Gate>) {
+    *GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = gate;
+}
+
+pub fn current_gate() -> Option<Gate> {
+    GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
+async fn dial_gate(gate: &Gate, leg: GateLeg) -> Result<Conn> {
+    let (host, port) = host_port(&gate.address, AUTH_PORT);
+    let mut stream = dial(host, port).await?;
+    let leg_name = match leg {
+        GateLeg::Login => "LOGIN",
+        GateLeg::World => "WORLD",
+    };
+    stream.write_all(format!("HOA1 {} {leg_name}\n", gate.token).as_bytes())?;
+    stream.set_read_timeout(Some(GATE_ANSWER_TIMEOUT))?;
+    let answer = read_gate_line(&mut stream).await?;
+    stream.set_read_timeout(None)?;
+    if answer.trim_end() != "HOA1 OK" {
+        return Err(anyhow::Error::new(DialFailure {
+            address: gate.address.clone(),
+            unresolved: false,
+        })
+        .context(format!("the host refused the join: {}", answer.trim_end())));
+    }
+    Ok(stream)
+}
+
+/// wenilla: one byte at a time off the async [`Conn`]; a closed link ends the line.
+async fn read_gate_line(stream: &mut Conn) -> Result<String> {
+    use crate::transport::ReadExactAsync;
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() < GATE_ANSWER_LIMIT {
+        if stream.read_exact_async(&mut byte).await.is_err() {
+            break;
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        line.push(byte[0]);
+    }
+    Ok(String::from_utf8_lossy(&line).into_owned())
 }
 
 /// A realm's world address as `NetClient::Connect` (`0x537820`) splits it: the host up to the
@@ -461,7 +531,10 @@ pub async fn logon_with_pin_async(
     let (mut stream, reply, server_public_key) = {
         let mut dialed = None;
         for dial in 0..MAX_CHALLENGE_DIALS {
-            let mut stream = connect(&target.0, target.1, &address).await?;
+            let mut stream = match current_gate() {
+                Some(gate) => dial_gate(&gate, GateLeg::Login).await?,
+                None => connect(&target.0, target.1, &address).await?,
+            };
             if dial == 0 {
                 stage(LoginStage::Authenticating);
             }

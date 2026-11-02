@@ -30,6 +30,7 @@ pub(crate) struct RemoteMotion {
     pub(crate) vertical_velocity: f32,
     /// The launch's `(cos, sin) * xyspeed`, frozen for the arc; `[0; 2]` on the ground.
     pub(crate) jump_xy_vel: [f32; 2],
+    pub(crate) air_dash_left: f32,
     /// This arc's start height (`+0x7c`), which every airborne apply re-derives from the packet
     /// ([`FallHeight::airborne`]); `None` on the ground. On landing, its drop to the landing is
     /// the fall height that gates the grunt and dust puff.
@@ -361,6 +362,7 @@ pub(in crate::net) fn apply_move(
     rm.pitch = ev.pitch;
     rm.vertical_velocity = vertical_velocity;
     rm.jump_xy_vel = jump_xy_vel;
+    rm.air_dash_left = air_dash_seed(ev.jump, ev.fall_time);
     rm.last_apply_ms = now_ms;
     rm.last_apply_pos = ev.position;
 }
@@ -385,14 +387,20 @@ pub(in crate::net) fn drain_pending_moves(
     mut commands: Commands,
     mut landings: MessageWriter<crate::creature_anim::HardLanding>,
     mut tick: ResMut<MoveTick>,
-    mut q: Query<(Entity, &mut RemoteMotion), (Without<Spline>, Without<ActiveMover>)>,
+    mut q: Query<
+        (Entity, &mut RemoteMotion, Option<&mut UnitSpeeds>),
+        (Without<Spline>, Without<ActiveMover>),
+    >,
 ) {
     let now_ms = time.elapsed_secs_f64() * 1000.0;
-    for (e, mut rm) in &mut q {
+    for (e, mut rm, mut speeds) in &mut q {
         while rm.pending.front().is_some_and(|ev| ev.fire_ms <= now_ms) {
             let ev = rm.pending.pop_front().expect("front checked");
             apply_move(e, &ev.mv, &mut rm, now_ms, &mut commands, &mut landings);
             rm.fired_at_ms = Some(ev.fire_ms);
+            if let (Some((kind, speed)), Some(speeds)) = (ev.speed, speeds.as_deref_mut()) {
+                crate::net::objects::write_speed(&mut speeds.0, kind, speed);
+            }
         }
     }
     tick.0 = Some(now_ms);
@@ -652,6 +660,17 @@ pub(in crate::net) fn extrapolate_remote_units(
         rm.orientation = orientation;
         rm.vertical_velocity = vertical_velocity;
         rm.speed = speed;
+        if rm.air_dash_left > 0.0 {
+            rm.air_dash_left -= dt;
+            if rm.air_dash_left <= 0.0 {
+                rm.air_dash_left = 0.0;
+                let capped = crate::player::dash::capped_horizontal(
+                    Vec3::new(rm.jump_xy_vel[0], rm.jump_xy_vel[1], 0.0),
+                    s.run,
+                );
+                rm.jump_xy_vel = [capped.x, capped.y];
+            }
+        }
         if benilla_assets::trace::enabled()
             && sampled
                 .get(&e)
@@ -739,6 +758,15 @@ pub(in crate::net) fn fall_drop(zspeed: f32, fall_time: u32, feather: bool) -> f
     -mean * t
 }
 
+fn air_dash_seed(jump: Option<JumpInfo>, fall_time: u32) -> f32 {
+    match jump {
+        Some(j) if j.zspeed == 0.0 && crate::player::dash::is_dash_speed(j.xy_speed) => {
+            (crate::player::dash::AIR_DASH_SECS - fall_time as f32 / 1000.0).max(0.0)
+        }
+        _ => 0.0,
+    }
+}
+
 /// One packet's step of the landing predictor: `(fall_start, descent)`, the descent
 /// `start - landing` only on the `FALLING` to grounded edge with a known start. `packet` is an
 /// airborne packet's start height ([`FallHeight::airborne`]), which each one re-derives, or a
@@ -776,6 +804,10 @@ impl RemoteMotion {
             let mut pos = self.wow_pos;
             pos[0] += self.jump_xy_vel[0] * dt;
             pos[1] += self.jump_xy_vel[1] * dt;
+            if self.air_dash_left > 0.0 {
+                let speed = self.jump_xy_vel[0].hypot(self.jump_xy_vel[1]);
+                return (pos, self.orientation, 0.0, speed);
+            }
             // The local mover's own fall step. `SAFE_FALL` is inside the server-authored merge
             // mask, so this word is the one `0x7c5d23` tests.
             let terminal = if self.flags & move_flags::SAFE_FALL != 0 {
@@ -897,6 +929,7 @@ mod under_floor {
             speed: 0.0,
             vertical_velocity: 0.0,
             jump_xy_vel: [0.0; 2],
+            air_dash_left: 0.0,
             fall_start: None,
             pending: std::collections::VecDeque::new(),
             relay: RelayChain::default(),
