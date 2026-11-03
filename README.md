@@ -195,16 +195,38 @@ smooth with a big horde on screen. Not tested yet: 3–4 players at once.
 
 ## Credits and licences
 
-- Client code by [benilla](https://github.com/samwhosung/benilla) and its contributors,
-  [HoA](https://github.com/jonhaldors/hordes-of-azeroth-client) and
-  [wenilla](https://github.com/Arnesen/wenilla): MIT or Apache 2.0, at your option
-  ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)). Our changes are under the same terms.
-- HoA's server, addon and launcher come from
-  [hordes-of-azeroth](https://github.com/jonhaldors/hordes-of-azeroth) under GPL-3.0 and
-  aren't included here.
-- For how the browser build works, see [`web/README.md`](web/README.md),
-  [`AGENTS.md`](AGENTS.md) and wenilla's own README.
+**The code here is theirs.** Everything except `hosting/` and the few browser fixes listed above
+was written by the authors of these projects, and their full commit history is kept in this
+repository:
 
-This is a fan project, not affiliated with or endorsed by Blizzard Entertainment. It ships no
-Blizzard content: you bring your own 1.12.1 client. World of Warcraft is a trademark of
-Blizzard Entertainment, Inc.
+| project | authors | licence |
+|---|---|---|
+| [benilla](https://github.com/samwhosung/benilla) | Sam and contributors | MIT or Apache 2.0 |
+| [Hordes of Azeroth client](https://github.com/jonhaldors/hordes-of-azeroth-client) | jonhaldors and contributors | MIT or Apache 2.0 |
+| [wenilla](https://github.com/Arnesen/wenilla) | Alexander Arnesen and contributors | MIT or Apache 2.0 |
+
+- **Licence:** MIT or Apache 2.0, at your option ([LICENSE-MIT](LICENSE-MIT),
+  [LICENSE-APACHE](LICENSE-APACHE)), exactly as upstream; the copyright notice is unchanged. Our
+  changes (the browser fixes and `hosting/`) are under the same terms.
+- **Changes:** our own edits are the few listed under [Where it comes from](#where-it-comes-from),
+  plus `hosting/`; the git history shows each one.
+- **Whose commits:** HoA's client changes are brought in as one patch per HoA release, in
+  commits named `Hordes of Azeroth …` or `HoA client … (v…)`. Those commits show our account as
+  committer, but the code in them is HoA's, written by jonhaldors and contributors; see
+  [their repository](https://github.com/jonhaldors/hordes-of-azeroth-client/commits) for the
+  real authors. wenilla's and benilla's commits keep their own authors.
+- **Vendored code** in [`third_party/`](third_party/) keeps its own licence:
+  [kira](third_party/kira) and [wgpu-hal](third_party/wgpu-hal) (MIT or Apache 2.0),
+  [mlua-sys](third_party/mlua-sys) (MIT, [LICENSE](third_party/mlua-sys/LICENSE)), and a stand-in
+  for `alsa` written by benilla. Each folder's `BENILLA.md` says what differs from the original.
+- **Not included:** HoA's server, addon, launcher and spell-effects Kit come from
+  [hordes-of-azeroth](https://github.com/jonhaldors/hordes-of-azeroth) under GPL-3.0. You install
+  them with HoA's own launcher; `hosting/spell-effects.sh` downloads the Kit's source from that
+  repository when you run it.
+- **More:** how the browser build works is in [`web/README.md`](web/README.md) and
+  [`AGENTS.md`](AGENTS.md), and in wenilla's own README.
+
+This is an unofficial fan project. It is not affiliated with or endorsed by the authors of
+Hordes of Azeroth, wenilla or benilla, nor by Blizzard Entertainment. It ships no Blizzard
+content: you bring your own 1.12.1 client. World of Warcraft is a trademark of Blizzard
+Entertainment, Inc.
