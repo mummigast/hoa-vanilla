@@ -1,0 +1,7 @@
+[Unit]
+Description=Hordes of Azeroth: MariaDB (127.0.0.1:3306)
+[Service]
+WorkingDirectory=%h/hoa/game/server/mariadb
+ExecStart=%h/hoa/game/server/mariadb/bin/mariadbd --defaults-file=%h/hoa/game/config/mariadb.ini --basedir=%h/hoa/game/server/mariadb --datadir=%h/hoa/game/server/mariadb-data
+ExecStop=%h/hoa/game/server/mariadb/bin/mariadb-admin -h 127.0.0.1 -P 3306 -u root -proot --skip-ssl shutdown
+Restart=on-failure

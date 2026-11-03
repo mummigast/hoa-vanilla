@@ -1,0 +1,10 @@
+[Unit]
+Description=Hordes of Azeroth browser build: wenilla-host (loopback only, behind hoa-web's login)
+After=network.target
+[Service]
+WorkingDirectory=%h/hoa
+ExecStart=%h/hoa/hoa-vanilla/target/release/wenilla-host --bind 127.0.0.1:8090 --www %h/hoa/hoa-vanilla/web/dist --data %h/hoa/game/Data --overlay %h/hoa/game
+Restart=on-failure
+Nice=5
+[Install]
+WantedBy=default.target

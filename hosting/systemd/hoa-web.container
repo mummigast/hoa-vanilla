@@ -1,0 +1,11 @@
+[Unit]
+Description=Hordes of Azeroth browser build, password gate
+[Container]
+ContainerName=hoa-web
+Image=docker.io/library/caddy:2
+Network=host
+Volume=%h/hoa/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+[Service]
+Restart=always
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Hordes of Azeroth: world server (127.0.0.1:8085)
+Requires=hoa-db.service
+After=hoa-db.service hoa-realmd.service
+[Service]
+WorkingDirectory=%h/hoa/game/server/run
+ExecStartPre=/bin/sh -c 'for i in $(seq 60); do (exec 3<>/dev/tcp/127.0.0.1/3306) 2>/dev/null && exit 0; sleep 1; done; exit 1'
+# The world console reads stdin; commands appended to console.in reach it
+# (e.g. `echo "account create name pass" >> console.in`).
+ExecStart=/bin/sh -c 'tail -n0 -F console.in | exec ./mangosd -c mangosd.conf'
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30

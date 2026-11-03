@@ -1,0 +1,4 @@
+# name password, one per line, letters and digits only.
+# Each is a website login and a game account with the same password.
+thrall ChangeMe123
+jaina ChangeMe456

@@ -1,148 +1,190 @@
 <div align="center">
-  <h1>benilla</h1>
-  <p><b>A complete World of Warcraft 1.12.1 client, written from scratch in Rust and <a href="https://bevy.org">Bevy</a></b></p>
-  <p>
-    <a href="https://discord.gg/wJSJx467G4"><img src="https://img.shields.io/discord/1529280129518538922?style=for-the-badge&logo=discord&logoColor=white&label=discord&color=5865F2" alt="Discord"></a>
-    <a href="https://www.youtube.com/playlist?list=PLdCnpZNKxyb8"><img src="https://img.shields.io/badge/devlog-youtube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube devlog"></a>
-    <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=for-the-badge" alt="License"></a>
-  </p>
+  <h1>hoa-vanilla</h1>
+  <p><b>Hordes of Azeroth, played in a browser tab</b></p>
 </div>
 
-## wenilla — this fork: benilla in a browser tab
+[Hordes of Azeroth](https://github.com/jonhaldors/hordes-of-azeroth) (HoA) is a survivors-style
+game mode for World of Warcraft 1.12.1: an endless horde, spells that fire on their own, and a
+choice at every level-up, alone or in co-op with up to 3 friends. Normally you play it with its
+launcher, a desktop client and a server on your own PC.
 
-This fork adds **wenilla** on `main`: the same client compiled to WebAssembly, so a 1.12.1
-server can be played from a browser with nothing installed — login, character select and the
-world, with the full FrameXML/Lua UI, over a WebSocket. Nothing is rewritten: raw TCP becomes a
-WebSocket through a small host (`wenilla-host`), the MPQ chain becomes single files fetched over
-HTTP, and the C Lua 5.1 VM is compiled for wasm with the wasi-sdk sysroot. WebGPU is required
-for the world; the host proxies only to the server you point it at, and never sends the MPQs.
+This repository builds HoA's client for the **browser** (WebAssembly + WebGPU), so you can host
+it once and let your friends play from a link, with nothing to install on their side.
+
+## Where it comes from
+
+Three projects, merged:
+
+| project | what it is | what we use |
+|---|---|---|
+| [benilla](https://github.com/samwhosung/benilla) | a WoW 1.12.1 client written from scratch in Rust and Bevy | the client itself |
+| [HoA client](https://github.com/jonhaldors/hordes-of-azeroth-client) | HoA's fork of benilla: its plugin, UI and co-op | HoA's game mode |
+| [wenilla](https://github.com/Arnesen/wenilla) | a fork of benilla that builds for the browser | the browser build and `wenilla-host` |
+
+Branch `web` is wenilla's `main` with HoA's client changes replayed on top, plus a few small
+fixes of our own, needed only in the browser (all `#[cfg(target_arch = "wasm32")]`):
+
+- `crates/wenilla`: the browser entry runs HoA's plugin.
+- `benilla-app/src/ui_script/addons.rs`: loads addons named in `Interface\AddOns\wenilla-addons.txt`,
+  since a web page has no AddOns folder to scan.
+- `hoa/src/coop_lua.rs`: co-op calls run inline (a web page has no threads; `thread::spawn`
+  froze it at character select).
+- `loading_screen/hold.rs`: never withhold the frame during a long same-map teleport (froze the page).
+- `wenilla-host --overlay DIR`: serves HoA's loose `Interface\GlueXML` and `Interface\AddOns`
+  files over the MPQ chain, the way the desktop client reads them next to `Data`.
+
+New HoA releases and new wenilla commits are merged into `web` as they come out.
+
+## What you need
+
+- **World of Warcraft 1.12.1 (build 5875), English (enUS)**, a copy used only for this.
+  Nothing here includes the game.
+- **HoA's server**, installed by HoA's own launcher into that game folder: download
+  [the Linux launcher](https://github.com/jonhaldors/hordes-of-azeroth/releases/latest), unpack it next to
+  `WoW.exe`, start it and press **Install** once. It adds the server, its MariaDB, the
+  addon and the login screen files. After that you run the server yourself (below), not the launcher.
+- **Linux** with Rust (`rustup`) and a C compiler. Building needs no root.
+- **A browser with WebGPU** for the players: current Chrome or Edge (Linux Chrome may need WebGPU switched on in
+  `chrome://flags`); recent Firefox has worked too. The page
+  must be served over **HTTPS** (or `localhost`), since browsers only allow WebGPU there.
+
+## Build
 
 ```bash
-scripts/web-setup.sh                                   # once: wasm target, wasm-bindgen, wasi-sdk (no sudo)
-scripts/web-build.sh                                   # → web/dist/
-cargo run --release -p wenilla-host -- --www web/dist --data /path/to/WoW/Data
-# open http://127.0.0.1:8090/
+scripts/web-setup.sh                                 # once: wasm target, wasm-bindgen, wasi-sdk
+scripts/web-build.sh                                 # the client → web/dist/
+cargo build --release -p wenilla-host                # the small web server
 ```
 
-`wenilla-host` is a local testing tool: it serves the game data you point it at with no login,
-so keep it on loopback or a private network and never on the open internet. Hosting players
-is [`wenilla-realm`](crates/wenilla-realm/README.md), which gates everything behind a session.
-See [`web/README.md`](web/README.md) for the how and the porting notes, [`AGENTS.md`](AGENTS.md)
-for the map of the repository and the rules that bite, and [`docs/UPSTREAM.md`](docs/UPSTREAM.md)
-for how upstream is merged in. Everything else below is upstream benilla's README, unchanged;
-upstream is [samwhosung/benilla](https://github.com/samwhosung/benilla), merged into `main` as it
-publishes, and the web work is meant to be upstreamable piece by piece.
+## Play alone (the simple way)
 
-benilla speaks the original 1.12.1 protocol, so it connects to any server the real client could,
-and reads its game data at runtime from your own 1.12.1 install. Every file format and the network
-protocol are implemented from scratch, with no original client code, no third-party WoW crates,
-and no bundled game assets.
+HoA is set up for one player: the launcher creates one game account and writes it into
+`Interface\GlueXML\BonkAccount.lua`, and the login screen signs you in with it.
 
-What the real client does is read at its bytes in
-[benilla-re](https://github.com/samwhosung/benilla-re), the reverse engineering benilla is built
-against, by the same client addresses the comments here cite.
+1. Start the server: MariaDB, `realmd` and `mangosd` from `<game>/server` (the units in
+   [`hosting/systemd/`](hosting/systemd/) show exactly how).
+2. Start the web server, on loopback only:
+   ```bash
+   target/release/wenilla-host --www web/dist --data <game>/Data --overlay <game>
+   ```
+3. Open http://127.0.0.1:8090/ in a WebGPU browser.
 
-## What's inside
+> [!WARNING]
+> `wenilla-host` serves the game files and the game ports to anyone who can reach it, **with no
+> login**. Never expose it to the internet as it is. To let others in, use the setup below.
 
-- **Formats:** readers for the whole asset stack (the MPQ patch chain, BLP, DBC, ADT, WDT, WDL, M2
-  and WMO), wired into Bevy as an asset source.
-- **World:** terrain streamed out to the horizon, portal-culled buildings with interior lighting,
-  doodads and ground clutter, swimmable water, sky and weather, and the client's own day/night
-  lighting, fog and gamma.
-- **Models:** GPU-skinned M2s with the full animation controller, particles, ribbons and the spell
-  visuals, and characters end to end: customization, the armor composite, weapons with their
-  enchant glows, forms, stealth and mounts.
-- **Movement:** networked movement in both directions, the server-granted modes from slow fall to
-  roots, a follow camera with collision, boats, zeppelins and taxi flights.
-- **Networking:** SRP6 auth through world-session crypto and the object mirror into the ECS,
-  covering the game from movement and chat through combat, spells, groups and raids, quests,
-  trade, mail, the auction house and battlegrounds.
-- **Interface:** a FrameXML and Lua engine that runs the stock 1.12 interface off your install's
-  patch chain, and third-party 1.12 addons: Questie, pfUI, Bagnon, Bartender2 and most others
-  run. By choice, the options window and the ESC menu follow the Classic Era client's rather than
-  1.12's.
-- **Audio:** music, ambience and effects under the client's own selection and crossfade rules,
-  with interior and underwater transitions and zone reverb.
+## Host it for several players
 
-The format readers and the UI engine core are plain Rust with no Bevy in them, and the world
-renderer runs with no game attached. [`docs/MAP.md`](docs/MAP.md) maps every crate and subsystem,
-and [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md) lists everywhere benilla differs from 1.12.1; both are
-generated from the code.
+To let friends play, each with their own account and characters, put a login in front of
+`wenilla-host`. The login (a small [Caddy](https://caddyserver.com) server) does two jobs:
+
+1. **It keeps strangers out.** Everyone signs in with a name and password first.
+2. **It gives each player their own game account.** When the login screen asks for
+   `BonkAccount.lua`, the gate answers with *that player's* account instead of the launcher's
+   single one, so everyone is signed into the game automatically as themselves.
+
+```
+browser ─HTTPS─ your proxy (TLS) ─ gate: Caddy login (127.0.0.1:8080)
+                                       └─ wenilla-host (127.0.0.1:8090)
+                                            ├─ /          the client (web/dist)
+                                            ├─ /data/*    game files + HoA's overlay
+                                            └─ /ws/*      → realmd :3724, mangosd :8085
+```
+
+Everything listens on `127.0.0.1`; only your HTTPS proxy faces the internet.
+
+### 1. Pick the players
+
+Copy [`hosting/accounts.example.txt`](hosting/accounts.example.txt) to `accounts.txt`, one
+`name password` per line (letters and digits only). Each line is both a website login and a game
+account with the same password. Keep this file private (`chmod 600`) and out of git.
+
+### 2. Create their game accounts
+
+`mangosd` takes commands on its console. Turn it on with `Console.Enable = 1` in
+`<game>/server/run/mangosd.conf`. The example unit feeds the console from a file, so you can
+type commands without a terminal attached:
+
+```bash
+echo "account create thrall ChangeMe123" >> <game>/server/run/console.in
+```
+
+Send one command per line and give each a few seconds. Use the same names and passwords as in
+`accounts.txt`.
+
+### 3. Make the gate
+
+```bash
+python3 -I hosting/make-gate.py accounts.txt Caddyfile
+```
+
+This writes a `Caddyfile` (mode 600, it holds the passwords) that listens on `127.0.0.1:8080`
+and passes everything on to `wenilla-host`. Run it whenever you change `accounts.txt`, then
+restart the gate. Options: `--listen` and `--host` if you use other ports.
+
+### 4. Run it all
+
+[`hosting/systemd/`](hosting/systemd/) has user units for the whole stack. They assume this
+layout (change the paths if yours differs):
+
+```
+~/hoa/game          the WoW folder HoA's launcher installed into
+~/hoa/hoa-vanilla   this repository, built
+~/hoa/Caddyfile     the gate, from make-gate.py
+```
+
+```bash
+cp hosting/systemd/*.service hosting/systemd/hoa.target ~/.config/systemd/user/
+cp hosting/systemd/hoa-web.container ~/.config/containers/systemd/     # the gate, via podman
+systemctl --user daemon-reload
+systemctl --user start hoa.target hoa-web
+```
+
+`hoa.target` starts the database, `realmd`, `mangosd` and `wenilla-host`. `hoa-web` is the gate
+(Caddy in podman; any Caddy 2 works).
+
+### 5. Put HTTPS in front
+
+Point a domain at your machine and let a reverse proxy with TLS forward to `127.0.0.1:8080`.
+With Caddy that's all of it:
+
+```
+hoa.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+Send your friends the link and their name and password.
+
+### Co-op
+
+Players on the same server see each other. `/invite` groups them, and the group shares one run
+(same horde, levelling up together). No launcher is needed for it.
+
+### Updates
+
+When HoA releases a new version, update the server files the way the launcher does (or run the
+launcher's **Update** once, with the server stopped), then pull this repository and rebuild the
+client. Server and client should be on the same HoA version. Back up the `characters` and
+`realmd` databases first.
 
 ## Status
 
-Fully playable on a 1.12.1 server that doesn't enforce Warden or need client changes beyond its
-MPQ archives. What is left:
+Solo runs work in Chrome and Firefox, and a two-player co-op run has worked in Chrome. Not tested
+yet: 3–4 players at once.
 
-- The long tail of small differences from 1.12.1, tracked as
-  [issues](https://github.com/samwhosung/benilla/issues).
-- Addon compatibility, the remaining options and performance, ongoing.
+## Credits and licences
 
-benilla is a faithful 1.12.1 client and the foundation people build on. There are no prebuilt
-downloads: a packaged build, a particular server's changes or anything 1.12.1 never had belongs
-in a fork, and forks are welcome. GitHub lists
-[every public fork](https://github.com/samwhosung/benilla/forks).
+- Client code by [benilla](https://github.com/samwhosung/benilla) and its contributors,
+  [HoA](https://github.com/jonhaldors/hordes-of-azeroth-client) and
+  [wenilla](https://github.com/Arnesen/wenilla): MIT or Apache 2.0, at your option
+  ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)). Our changes are under the same terms.
+- HoA's server, addon and launcher come from
+  [hordes-of-azeroth](https://github.com/jonhaldors/hordes-of-azeroth) under GPL-3.0 and
+  aren't included here.
+- For how the browser build works, see [`web/README.md`](web/README.md),
+  [`AGENTS.md`](AGENTS.md) and wenilla's own README.
 
-Not planned: other expansions or client versions, Warden (anticheat).
-
-## Running it
-
-benilla builds and runs on macOS, Linux and Windows. You need:
-
-- **A 1.12.1 client (build 5875)** for the game data, in any locale. benilla only reads it, and
-  shows its text in the client's language; development runs on English clients.
-- **A 1.12.1 server.** [vmangos](https://github.com/vmangos/core) is what development runs
-  against; cMaNGOS and the other 1.12.1 cores speak the same protocol. benilla does not answer
-  Warden, so a server that enforces it disconnects the session after its timeout; vmangos ships
-  with Warden off.
-- **Stable Rust and a C compiler**, which some dependencies build with: on macOS the
-  Xcode command line tools, on Linux the ALSA and udev development packages and pkg-config, on
-  Windows the MSVC build tools that the Rust installer sets up.
-
-```sh
-WOW_DATA=/path/to/WoW/Data cargo run --release -p benilla
-```
-
-On Windows, in PowerShell:
-
-```powershell
-$env:WOW_DATA="C:\path\to\WoW\Data"; cargo run --release -p benilla
-```
-
-Each release is a tag on the [Releases page](https://github.com/samwhosung/benilla/releases):
-`git checkout <tag>` first runs that release, and `main` is the development tip.
-
-`WOW_DATA` names the install's `Data` folder; a link to the install named `WoW` at the repo root
-does the same (`ln -s /path/to/WoW WoW`, or on Windows a junction, which needs no admin rights:
-`New-Item -ItemType Junction -Path WoW -Target C:\path\to\WoW`). The server defaults to
-`localhost:3724`, the stock auth port. Point `WOW_HOST` at another (`WOW_HOST=play.example.com`, or
-`play.example.com:5000` for a remapped port), or set it from the Realmlist button on the login
-screen, which remembers it. Credentials go in at the login screen, or set `WOW_USER` and `WOW_PASS`
-to skip it.
-
-Settings, screenshots and addons live in `benilla-config/` at the repo root: a 1.12 addon goes in
-`benilla-config/AddOns/`. [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) has the rest, from the
-player build to the tests.
-
-## Contributing
-
-Issues and pull requests are open. [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) says where to
-start, what gets in, how a change is judged and what happens to a pull request once it is open.
-Bugs, questions and ideas are welcome on the [Discord](https://discord.gg/wJSJx467G4) too.
-
----
-
-Early inspiration and file format guidance came from the
-[wowemulation-dev](https://github.com/wowemulation-dev) community, and
-[warcraft-rs](https://github.com/wowemulation-dev/warcraft-rs) in particular.
-
-benilla is an independent fan project, not affiliated with or endorsed by Blizzard Entertainment.
-It ships **no Blizzard content**: no art, models, sounds, maps, MPQ contents or FrameXML. You
-provide your own legally obtained 1.12.1 client, and the stock interface runs off its FrameXML at
-runtime. The few files under `crates/benilla-app/assets/ui/` are our own, not copies of it:
-adapters over stock files, and the settings windows and script error log benilla draws itself.
-
-World of Warcraft is a trademark of Blizzard Entertainment, Inc. Our own code is licensed under
-[MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), at your option. The kira audio engine and the
-wgpu-hal graphics layer under `third_party/` are vendored under the same two licenses, with their
-authors' copyright notices beside them.
+This is a fan project, not affiliated with or endorsed by Blizzard Entertainment. It ships no
+Blizzard content: you bring your own 1.12.1 client. World of Warcraft is a trademark of
+Blizzard Entertainment, Inc.

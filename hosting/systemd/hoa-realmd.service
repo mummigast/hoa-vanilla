@@ -1,0 +1,10 @@
+[Unit]
+Description=Hordes of Azeroth: login server (127.0.0.1:3724)
+Requires=hoa-db.service
+After=hoa-db.service
+[Service]
+WorkingDirectory=%h/hoa/game/server/run
+ExecStartPre=/bin/sh -c 'for i in $(seq 60); do (exec 3<>/dev/tcp/127.0.0.1/3306) 2>/dev/null && exit 0; sleep 1; done; exit 1'
+ExecStart=%h/hoa/game/server/run/realmd -c realmd.conf
+Restart=on-failure
+RestartSec=5

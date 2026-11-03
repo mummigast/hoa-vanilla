@@ -1,0 +1,5 @@
+[Unit]
+Description=Hordes of Azeroth in the browser (server + wenilla-host)
+Wants=hoa-db.service hoa-realmd.service hoa-mangosd.service hoa-host.service
+[Install]
+WantedBy=default.target
