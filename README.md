@@ -55,7 +55,9 @@ New HoA releases and new wenilla commits are merged into `web` as they come out.
   [the Linux launcher](https://github.com/jonhaldors/hordes-of-azeroth/releases/latest), unpack it next to
   `WoW.exe`, start it and press **Install** once. It adds the server, its MariaDB, the
   addon and the login screen files. After that you run the server yourself (below), not the launcher.
-- **Linux** with Rust (`rustup`) and a C compiler. Building needs no root.
+- **Linux** with systemd, Rust (`rustup`), a C compiler, and podman (or Caddy) for the login gate.
+  Building needs no root. Built and run on **Bazzite** (Fedora-based); other distributions should
+  work but haven't been tried. Paths must not contain spaces.
 - **A browser with WebGPU** for the players: current Chrome or Edge (Linux Chrome may need WebGPU switched on in
   `chrome://flags`); recent Firefox has worked too. The page
   must be served over **HTTPS** (or `localhost`), since browsers only allow WebGPU there.
@@ -105,59 +107,23 @@ browser ─HTTPS─ your proxy (TLS) ─ gate: Caddy login (127.0.0.1:8080)
 
 Everything listens on `127.0.0.1`; only your HTTPS proxy faces the internet.
 
-### 1. Pick the players
+### Quick setup
 
-Copy [`hosting/accounts.example.txt`](hosting/accounts.example.txt) to `accounts.txt`, one
-`name password` per line (letters and digits only). Each line is both a website login and a game
-account with the same password. Keep this file private (`chmod 600`) and out of git.
+1. Install HoA's server into your WoW folder with its launcher (**Install**, once).
+2. Copy [`hosting/accounts.example.txt`](hosting/accounts.example.txt) to `accounts.txt` and
+   write one `name password` per player (letters and digits only). Each line is both their
+   website login and their game account. Keep the file private and out of git.
+3. Run:
+   ```bash
+   hosting/setup.sh --game /path/to/WoW --accounts accounts.txt
+   ```
+   It builds the client, installs the services (systemd user units), turns on the world
+   console, creates the game accounts and starts the login gate on `127.0.0.1:8080`. Run it
+   again to add players or after an update; it's safe to repeat.
+4. Put HTTPS in front (below) and send your friends the link and their name and password.
+5. To keep it running after you log out: `loginctl enable-linger $USER`.
 
-### 2. Create their game accounts
-
-`mangosd` takes commands on its console. Turn it on with `Console.Enable = 1` in
-`<game>/server/run/mangosd.conf`. The example unit feeds the console from a file, so you can
-type commands without a terminal attached:
-
-```bash
-echo "account create thrall ChangeMe123" >> <game>/server/run/console.in
-```
-
-Send one command per line and give each a few seconds. Use the same names and passwords as in
-`accounts.txt`.
-
-### 3. Make the gate
-
-```bash
-python3 -I hosting/make-gate.py accounts.txt Caddyfile --data <game>/Data
-```
-
-This writes a `Caddyfile` (mode 600, it holds the passwords) that listens on `127.0.0.1:8080`
-and passes everything on to `wenilla-host`. Run it whenever you change `accounts.txt`, then
-restart the gate. Run it again after an update that changes the game's MPQs: the gate tags the
-game files, so returning players fetch the changed ones instead of keeping old copies. Options:
-`--listen` and `--host` if you use other ports.
-
-### 4. Run it all
-
-[`hosting/systemd/`](hosting/systemd/) has user units for the whole stack. They assume this
-layout (change the paths if yours differs):
-
-```
-~/hoa/game          the WoW folder HoA's launcher installed into
-~/hoa/hoa-vanilla   this repository, built
-~/hoa/Caddyfile     the gate, from make-gate.py
-```
-
-```bash
-cp hosting/systemd/*.service hosting/systemd/hoa.target ~/.config/systemd/user/
-cp hosting/systemd/hoa-web.container ~/.config/containers/systemd/     # the gate, via podman
-systemctl --user daemon-reload
-systemctl --user start hoa.target hoa-web
-```
-
-`hoa.target` starts the database, `realmd`, `mangosd` and `wenilla-host`. `hoa-web` is the gate
-(Caddy in podman; any Caddy 2 works).
-
-### 5. Put HTTPS in front
+### HTTPS
 
 Point a domain at your machine and let a reverse proxy with TLS forward to `127.0.0.1:8080`.
 With Caddy that's all of it:
@@ -168,7 +134,27 @@ hoa.example.com {
 }
 ```
 
-Send your friends the link and their name and password.
+<details>
+<summary><b>What setup.sh does, by hand</b></summary>
+
+- **Build:** `scripts/web-setup.sh`, `scripts/web-build.sh`, `cargo build --release -p wenilla-host`.
+- **World console:** `Console.Enable = 1` in `<game>/server/run/mangosd.conf` and in
+  `<game>/config/mangosd.overrides.conf` (the launcher rebuilds the first from the second). The
+  unit feeds the console from `<game>/server/run/console.in`.
+- **Services:** the files in [`hosting/systemd/`](hosting/systemd/), with `%h/hoa/game` replaced
+  by your WoW folder and `%h/hoa/hoa-vanilla` by this repository, go to
+  `~/.config/systemd/user/`; `hoa-web.container` (the gate in podman) to
+  `~/.config/containers/systemd/`. `hoa.target` starts MariaDB, `realmd`, `mangosd` and
+  `wenilla-host`.
+- **Realm list:** `UPDATE realmd.realmlist SET address = '127.0.0.1', port = 8085`.
+- **Accounts:** one `account create NAME PASSWORD` per line appended to `console.in`, a few
+  seconds apart.
+- **Gate:** `python3 -I hosting/make-gate.py accounts.txt <Caddyfile> --data <game>/Data`. It
+  writes the Caddyfile (mode 600: it holds the passwords) with the per-player
+  `BonkAccount.lua` and a tag on the game files, so returning players fetch changed files
+  instead of keeping old copies. `--listen` and `--host` change the ports.
+
+</details>
 
 ### Co-op
 
@@ -177,17 +163,35 @@ Players on the same server see each other. `/invite` groups them, and the group 
 
 ### Updates
 
-When HoA releases a new version, update the server files the way the launcher does (or run the
-launcher's **Update** once, with the server stopped), then pull this repository and rebuild the
-client. The launcher also rebuilds `Data/patch-z.MPQ` (HoA's spell effects); without it, run HoA's
-Kit yourself (`tools/telegraphs` in the HoA repository, `dotnet` and `build <game>`). Then rerun
-`make-gate.py`. Server and client should be on the same HoA version. Back up the `characters` and
-`realmd` databases first.
+When HoA releases a new version:
+
+1. Back up the `characters` and `realmd` databases.
+2. Stop the services (`systemctl --user stop hoa.target hoa-web`), open the launcher and press
+   **Update**. It updates the server and rebuilds the spell effects (`Data/patch-z.MPQ`).
+3. `git pull` here, then run `hosting/setup.sh` again: it rebuilds the client and the gate's
+   file tag and starts everything.
+
+Server and client should be on the same HoA version. If you update the server files without the
+launcher, rebuild the spell effects yourself with `hosting/spell-effects.sh --game /path/to/WoW`
+(it builds HoA's own Kit with .NET 10, or in a podman container).
 
 ## Status
 
-Solo runs work in Chrome and Firefox, and a two-player co-op run has worked in Chrome. Not tested
-yet: 3–4 players at once.
+Solo runs work in Chrome and Firefox, a two-player co-op run has worked in Chrome, and it stays
+smooth with a big horde on screen. Not tested yet: 3–4 players at once.
+
+## Troubleshooting
+
+| what you see | why, and what to do |
+|---|---|
+| black page, or it stops at world entry | no WebGPU: use current Chrome or Edge; on Linux, turn on WebGPU in `chrome://flags` |
+| "WebGPU" errors over plain `http://` on another machine | browsers only allow WebGPU on HTTPS or `localhost`: put HTTPS in front |
+| asked for a login, then the game's login screen fails | the game account is missing or has another password: rerun `setup.sh` |
+| new spells look wrong after an update | the spell effects are older than the server: `hosting/spell-effects.sh` |
+| a player still sees old files after an update | rerun `setup.sh` (or `make-gate.py`) so the gate's file tag changes |
+| the page freezes when you pick Quit | known; close the tab instead (the server saves when you leave) |
+| services stop when you log out | `loginctl enable-linger $USER` |
+| anything else | `journalctl --user -u hoa-mangosd -u hoa-realmd -u hoa-host -u hoa-web` |
 
 ## Credits and licences
 
