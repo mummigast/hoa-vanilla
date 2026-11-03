@@ -11,6 +11,18 @@ launcher, a desktop client and a server on your own PC.
 This repository builds HoA's client for the **browser** (WebAssembly + WebGPU), so you can host
 it once and let your friends play from a link, with nothing to install on their side.
 
+> [!NOTE]
+> **A personal project.** This was made so a couple of friends could play together in the browser.
+> It is shared as-is, in case it's useful to someone else: no support, no roadmap, no promises.
+>
+> **Mostly written by Claude**, Anthropic's AI, with a human deciding what to build and testing it.
+>
+> **All the real work is upstream.** The game, its content, balancing and fixes come straight from
+> [Hordes of Azeroth](https://github.com/jonhaldors/hordes-of-azeroth),
+> [wenilla](https://github.com/Arnesen/wenilla) and [benilla](https://github.com/samwhosung/benilla),
+> merged in as they release. This repository only adds the glue to run HoA in a browser. Bugs or
+> ideas about the game itself belong with those projects, and the credit goes to their authors.
+
 ## Where it comes from
 
 Three projects, merged:
