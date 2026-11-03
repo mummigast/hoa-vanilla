@@ -1,6 +1,6 @@
 """Write a Caddyfile that puts a login in front of wenilla-host, one login per player.
 
-    python3 -I make-gate.py accounts.txt Caddyfile [--listen 127.0.0.1:8080] [--host 127.0.0.1:8090]
+    python3 -I make-gate.py accounts.txt Caddyfile --data <game>/Data [--listen 127.0.0.1:8080] [--host 127.0.0.1:8090]
 
 accounts.txt has one `name password` per line (letters and digits only). Each name is both a
 website login and a game account with the same password; create the game accounts on the world
@@ -8,12 +8,18 @@ server too (see the README). Behind the login everything is passed to wenilla-ho
 Hordes of Azeroth's `Interface\\GlueXML\\BonkAccount.lua`: the gate answers it per login, so the
 login screen signs each player into their own account instead of the launcher's single one.
 
+Game files: wenilla-host tells browsers to keep them for a year under their name, so an update that
+changes an MPQ would never reach a returning player. The gate gives them a tag made from the MPQs
+in --data instead: browsers revalidate on each visit and a match is answered with 304, and the
+page clears the site's cache once whenever the tag changes. Rerun this after any MPQ changes.
+
 The output holds the passwords in plain text (the gate needs them for BonkAccount.lua), so it is
 written with mode 600. Keep accounts.txt and the Caddyfile out of git.
 
 Needs `caddy` on PATH, or podman/docker to run the caddy:2 image, for the bcrypt hashes.
 """
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -34,6 +40,7 @@ def bcrypt(password):
 ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
 ap.add_argument("accounts")
 ap.add_argument("out")
+ap.add_argument("--data", required=True, help="the game's Data folder (the same one wenilla-host serves)")
 ap.add_argument("--listen", default="127.0.0.1:8080", help="where the gate listens (put TLS in front of it)")
 ap.add_argument("--host", default="127.0.0.1:8090", help="where wenilla-host listens")
 args = ap.parse_args()
@@ -43,6 +50,13 @@ accounts = [line.split() for line in open(args.accounts) if line.strip() and not
 for entry in accounts:
     if len(entry) != 2 or not all(part.isalnum() for part in entry):
         raise SystemExit(f"bad line {' '.join(entry)!r}: want `name password`, letters and digits only")
+
+h = hashlib.sha256()
+for name in sorted(os.listdir(args.data)):
+    if name.lower().endswith(".mpq"):
+        st = os.stat(os.path.join(args.data, name))
+        h.update(f"{name.lower()}:{st.st_size}:{st.st_mtime_ns}\n".encode())
+stamp = h.hexdigest()[:16]
 
 addr, port = args.listen.rsplit(":", 1)
 users = "\n".join(f"\t\t{name} {bcrypt(pw)}" for name, pw in accounts)
@@ -69,6 +83,26 @@ http://:{port} {{
 BONK_PASSWORD = "{{hoa_password}}";
 ` 200
 	}}
+	@gamefile {{
+		path /data/*
+		not path /data/__index
+		not path_regexp (?i)^/data/interface(%5c|\\\\|/)(gluexml|addons)(%5c|\\\\|/)
+	}}
+	header @gamefile >Cache-Control "private, no-cache"
+	header @gamefile >ETag `W/"{stamp}"`
+	@unchanged {{
+		path /data/*
+		not path /data/__index
+		not path_regexp (?i)^/data/interface(%5c|\\\\|/)(gluexml|addons)(%5c|\\\\|/)
+		header If-None-Match `W/"{stamp}"`
+	}}
+	respond @unchanged 304
+	@newtag {{
+		path /
+		not header Cookie *hoa_data={stamp}*
+	}}
+	header @newtag Clear-Site-Data `"cache"`
+	header @newtag Set-Cookie "hoa_data={stamp}; Path=/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax"
 	reverse_proxy {args.host}
 }}
 """
@@ -76,4 +110,4 @@ fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f:
     f.write(caddyfile)
 os.chmod(args.out, 0o600)
-print(f"wrote {args.out} for {len(accounts)} logins")
+print(f"wrote {args.out} for {len(accounts)} logins, game files tag {stamp}")

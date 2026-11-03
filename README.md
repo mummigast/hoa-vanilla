@@ -127,12 +127,14 @@ Send one command per line and give each a few seconds. Use the same names and pa
 ### 3. Make the gate
 
 ```bash
-python3 -I hosting/make-gate.py accounts.txt Caddyfile
+python3 -I hosting/make-gate.py accounts.txt Caddyfile --data <game>/Data
 ```
 
 This writes a `Caddyfile` (mode 600, it holds the passwords) that listens on `127.0.0.1:8080`
 and passes everything on to `wenilla-host`. Run it whenever you change `accounts.txt`, then
-restart the gate. Options: `--listen` and `--host` if you use other ports.
+restart the gate. Run it again after an update that changes the game's MPQs: the gate tags the
+game files, so returning players fetch the changed ones instead of keeping old copies. Options:
+`--listen` and `--host` if you use other ports.
 
 ### 4. Run it all
 
@@ -177,7 +179,9 @@ Players on the same server see each other. `/invite` groups them, and the group 
 
 When HoA releases a new version, update the server files the way the launcher does (or run the
 launcher's **Update** once, with the server stopped), then pull this repository and rebuild the
-client. Server and client should be on the same HoA version. Back up the `characters` and
+client. The launcher also rebuilds `Data/patch-z.MPQ` (HoA's spell effects); without it, run HoA's
+Kit yourself (`tools/telegraphs` in the HoA repository, `dotnet` and `build <game>`). Then rerun
+`make-gate.py`. Server and client should be on the same HoA version. Back up the `characters` and
 `realmd` databases first.
 
 ## Status
