@@ -62,7 +62,7 @@ else
 		mcr.microsoft.com/dotnet/sdk:10.0 sh -c "dotnet build -c Release -o $WORK/bin -v q -nologo && dotnet $WORK/bin/Kit.dll build $GAME"
 fi
 
-CONF=${XDG_CONFIG_HOME:-$HOME/.config}/hoa-vanilla
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/hoa-wenilla
 if [ -f "$CONF/Caddyfile" ]; then
 	echo "== the game files changed: rerun make-gate.py (as setup.sh ran it) and restart hoa-web,"
 	echo "   so returning players fetch them fresh"

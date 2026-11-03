@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>hoa-vanilla</h1>
+  <h1>hoa-wenilla</h1>
   <p><b>Hordes of Azeroth, played in a browser tab</b></p>
 </div>
 
@@ -142,7 +142,7 @@ hoa.example.com {
   `<game>/config/mangosd.overrides.conf` (the launcher rebuilds the first from the second). The
   unit feeds the console from `<game>/server/run/console.in`.
 - **Services:** the files in [`hosting/systemd/`](hosting/systemd/), with `%h/hoa/game` replaced
-  by your WoW folder and `%h/hoa/hoa-vanilla` by this repository, go to
+  by your WoW folder and `%h/hoa/hoa-wenilla` by this repository, go to
   `~/.config/systemd/user/`; `hoa-web.container` (the gate in podman) to
   `~/.config/containers/systemd/`. `hoa.target` starts MariaDB, `realmd`, `mangosd` and
   `wenilla-host`.

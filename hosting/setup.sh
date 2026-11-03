@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up hoa-vanilla for several players on this machine, as systemd user services.
+# Set up hoa-wenilla for several players on this machine, as systemd user services.
 #
 #   hosting/setup.sh --game /path/to/WoW --accounts accounts.txt [--gate-port 8080] [--host-port 8090]
 #
@@ -27,7 +27,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 GAME=$(cd "$GAME" && pwd -P)
 ACCOUNTS=$(realpath "$ACCOUNTS")
 CONF=${XDG_CONFIG_HOME:-$HOME/.config}
-GATE_DIR=$CONF/hoa-vanilla
+GATE_DIR=$CONF/hoa-wenilla
 UNITS=$CONF/systemd/user
 QUADLETS=$CONF/containers/systemd
 RUN=$GAME/server/run
@@ -70,7 +70,7 @@ touch "$RUN/console.in"
 step "Services"
 mkdir -p "$UNITS" "$GATE_DIR"
 for f in hoa.target hoa-db.service hoa-realmd.service hoa-mangosd.service hoa-host.service; do
-	sed -e "s#%h/hoa/hoa-vanilla#$REPO#g" -e "s#%h/hoa/game#$GAME#g" -e "s#%h/hoa#$REPO#g" \
+	sed -e "s#%h/hoa/hoa-wenilla#$REPO#g" -e "s#%h/hoa/game#$GAME#g" -e "s#%h/hoa#$REPO#g" \
 		-e "s#127.0.0.1:8090#127.0.0.1:$HOST_PORT#g" "$REPO/hosting/systemd/$f" >"$UNITS/$f"
 done
 if [ "$GATE" = podman ]; then
