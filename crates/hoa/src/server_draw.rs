@@ -10,6 +10,7 @@ pub enum Shape {
     Circle,
     Cone,
     Line,
+    Ring,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +28,7 @@ pub struct MarkSpec {
     pub follow: u64,
     pub texture: Option<String>,
     pub done: f32,
+    pub opacity: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,6 +129,7 @@ impl Fields<'_> {
             0 => Some(Shape::Circle),
             1 => Some(Shape::Cone),
             2 => Some(Shape::Line),
+            3 => Some(Shape::Ring),
             _ => None,
         }
     }
@@ -143,6 +146,7 @@ fn mark(key: String, fields: &mut Fields, persistent_allowed: bool) -> Option<Dr
     let follow = fields.u64().unwrap_or(0);
     let texture = fields.next_str().filter(|t| !t.is_empty()).map(str::to_string);
     let done = fields.secs().unwrap_or(0.0);
+    let opacity = fields.u32().map_or(1.0, |percent| percent.min(100) as f32 / 100.0);
     Some(DrawCommand::Mark(MarkSpec {
         key,
         shape,
@@ -157,6 +161,7 @@ fn mark(key: String, fields: &mut Fields, persistent_allowed: bool) -> Option<Dr
         follow,
         texture,
         done,
+        opacity,
     }))
 }
 
@@ -246,6 +251,14 @@ mod tests {
         let spec = marked("HOA~tg~1~0~0~0~0~0~4~1500");
         assert!(!spec.outline_only);
         assert_eq!(spec.style, 0);
+        assert_eq!(spec.opacity, 1.0);
+    }
+
+    #[test]
+    fn a_mark_can_be_drawn_faint() {
+        let spec = marked("HOA~mark~reach~0~1~2~3~0~10~0~1~3~4294967297~~0~40");
+        assert_eq!(spec.opacity, 0.4);
+        assert_eq!(marked("HOA~mark~reach~0~1~2~3~0~10~0~1~3~0~~0~250").opacity, 1.0);
     }
 
     #[test]
