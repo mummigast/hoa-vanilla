@@ -597,7 +597,9 @@ pub(crate) mod net {
             racial_leader,
         } = ev
         {
-            let found = name.is_some() && names.creatures.get(entry).is_none();
+            let has_name = name.is_some();
+            let changed = has_name
+                && name.as_deref() != names.creatures.get(entry).map(|r| r.name.as_str());
             creature_name(
                 entry,
                 name,
@@ -612,7 +614,7 @@ pub(crate) mod net {
                 display_id,
                 &mut names,
             );
-            if found {
+            if changed {
                 for guid in units.matching(|s| s.0.object_entry() == Some(entry)) {
                     notices.write_batch(name_answered(guid));
                     notices.write(FieldNotice::Signal {
